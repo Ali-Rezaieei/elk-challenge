@@ -25,7 +25,7 @@ Elasticsearch and Kibana are pinned to **8.15.3**.
 
 ## 1. Quick Start (How to Run)
 
-You do not need to read the rest of this document to try it. Two commands bring the entire stack up.
+You do not need to read the rest of this document to try it. One command brings the entire stack up.
 
 ### The fastest path
 
@@ -59,23 +59,18 @@ Password: <generated at deploy time>
 
 Open the URL and log in.
 
-> **About the certificate.** The stack generates its own certificate authority at deploy time and issues certificates from it, so TLS is real end to end — on the public edge and on every internal hop, each one validated against that CA. Because the CA is created locally and is not in your browser's trust store, the browser shows a warning on first visit. This is the expected behaviour of a self-contained deployment with no registered domain: a trust-chain notice, not a transport-security problem.
->
-> Remove it, or side-step it entirely:
+> **About the certificate.** TLS is real end to end — the stack runs its own CA (created at deploy time) and validates it on the edge and every internal hop. The browser warns only because that CA isn't in its trust store: a trust-chain notice, not an insecure connection. Trust it, or skip the browser (run from the repo root):
 >
 > ```bash
-> # Trust the generated CA (recommended for review) — Debian/Ubuntu:
-> sudo cp local/ansible/.certs/ca.crt /usr/local/share/ca-certificates/elk-ca.crt \
->   && sudo update-ca-certificates
+> # Trust the CA — Debian/Ubuntu:
+> sudo cp local/ansible/.certs/ca.crt /usr/local/share/ca-certificates/elk-ca.crt && sudo update-ca-certificates
 > # macOS:
-> sudo security add-trusted-cert -d -r trustRoot \
->   -k /Library/Keychains/System.keychain local/ansible/.certs/ca.crt
->
-> # Or verify from the command line, no trust store touched, no browser warning:
+> sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain local/ansible/.certs/ca.crt
+> # Or just verify from the CLI:
 > curl --cacert local/ansible/.certs/ca.crt https://localhost:8443/api/status
 > ```
 >
-> For an internet-facing deployment with a real domain, switching to ACME (Let's Encrypt) is a change in the `ca`/`nginx` roles rather than a rewrite — there is no ACME toggle in the code today. The internal CA is the default precisely because it needs no domain and no internet access, and keeps the trust model identical across both targets (on `localhost`, ACME cannot issue a certificate at all).
+> There is no ACME toggle today, and on `localhost` ACME cannot issue at all — hence the internal CA (no domain, no internet needed, identical trust model on both targets). For an internet-facing deploy with a real domain, switching to Let's Encrypt is a change in the `ca`/`nginx` roles.
 
 ### Everyday commands
 
@@ -95,6 +90,8 @@ Every step is also available on its own, so a reviewer can inspect one thing at 
 
 ### Deploying to the cloud target (Hetzner)
 
+> **Prerequisites (Cloud):** a Hetzner Cloud project, an API token with **Read & Write** permission (Project → Security → API tokens → Generate), and an SSH key pair (`~/.ssh/id_ed25519` by default — set `ssh_public_key_path` in `cloud/terraform/terraform.tfvars` to use another). Terraform and Ansible as above; Docker is not needed.
+
 The same stack also deploys to a Hetzner VM, on real public infrastructure:
 
 ```bash
@@ -103,7 +100,7 @@ cd cloud
 make deploy
 ```
 
-Here the only public port is `443`, behind a default-deny firewall. The cloud preflight runs 19 checks: it validates the token, confirms it has write permission, checks the project is empty, and prints the hourly rate **before** anything is created. Remember to tear it down when you are done, as a live server keeps billing.
+The only public port is `443`, behind a default-deny firewall. The cloud preflight runs 19 checks — token validity and write permission, an empty project, quota, and the hourly rate — **before** anything is created. A full deploy takes about **8–10 minutes** (server boot and cloud-init, then Ansible), and a deploy–verify–destroy cycle costs a few cents (a `cx33` runs at roughly **EUR 0.02–0.03/hour** including its IPv4). The same `make` targets shown above are available under `cloud/`. Tear it down when you are done — a live server keeps billing.
 
 ### Tear it down
 
@@ -151,15 +148,15 @@ Kibana is served at `/` and the Elasticsearch API at `/es/`. Elasticsearch and K
 
 ### Terraform provisions the infrastructure
 
-Terraform owns everything that "exists." On the local target it creates a private Docker network on an uncommon subnet (`172.31.240.0/24`, to dodge home/VPN/corporate range collisions), named volumes, and the three service containers. On the cloud target it creates the Hetzner server, a private network and subnet, a default-deny firewall that allows only inbound 22 and 443 (plus ICMP echo), an SSH key, and cloud-init for unattended first boot; the server's public IP is auto-assigned. In both cases Terraform's final act is to write out the inventory that Ansible consumes. There are no configuration provisioners hidden inside Terraform — configuration is entirely Ansible's job, which keeps the two concerns from tangling.
+Terraform owns everything that "exists." **Local:** a private Docker network on an uncommon subnet (`172.31.240.0/24`, to dodge home/VPN collisions), named volumes, and the three containers. **Cloud:** the Hetzner server, a private network and subnet, a default-deny firewall (inbound 22 and 443 only), an SSH key, and cloud-init for first boot; the public IP is auto-assigned. On either target, its final act is to write the inventory Ansible consumes. No provisioners — configuration is entirely Ansible's job.
 
 ### Ansible configures and provisions the services
 
-Ansible takes the inventory and does all of the real setup through four focused roles. The `ca` role generates an internal certificate authority and issues TLS certificates for each service. The `elasticsearch`, `kibana`, and `nginx` roles install version-pinned software, render configuration from templates, wire in the certificates, enable security, and set generated passwords. The playbooks are idempotent by design — a second run reports `changed=0`, and `make idempotency` asserts exactly that rather than assuming it.
+Ansible does all real setup through four roles. `ca` creates an internal CA and issues each service a certificate; `elasticsearch`, `kibana` and `nginx` install version-pinned software, render config from templates, wire in the certs, enable security, and set generated passwords. The playbooks are idempotent — a second run reports `changed=0`, and `make idempotency` asserts it.
 
 ### Reproducible, and structured to replicate
 
-A single `make deploy` performs the entire pipeline end to end, and the inventory that links Terraform to Ansible is generated from state, so no address, container name or IP is ever copied by hand. Versions are pinned — Elasticsearch and Kibana `8.15.3`, the nginx image `nginxinc/nginx-unprivileged:1.27.2-alpine`, no `latest` tags — and the Terraform providers and Ansible collections are version-constrained. The `local/` and `cloud/` trees are each self-contained: neither references the other (a cross-tree grep finds nothing), and `run.sh`/`destroy.sh` only orchestrate by shelling into whichever one you pick, so deleting either directory leaves the other fully deployable. Because the default path runs entirely on Docker, a reviewer can clone the repository and get a passing deployment with no account, no API token and no cost.
+A single `make deploy` runs the whole pipeline, and the inventory linking Terraform to Ansible is generated from state — no address or name is ever copied by hand. Versions are pinned (Elasticsearch/Kibana `8.15.3`, nginx `nginxinc/nginx-unprivileged:1.27.2-alpine`, no `latest`); providers and collections are version-constrained. The `local/` and `cloud/` trees are self-contained — neither references the other, and `run.sh`/`destroy.sh` only shell into the one you pick, so deleting either leaves the other fully deployable. Because the default path is pure Docker, a reviewer gets a passing deployment with no account, token, or cost.
 
 ### Repository layout
 
@@ -187,7 +184,7 @@ A single `make deploy` performs the entire pipeline end to end, and the inventor
 |---|---|
 | Authentication | `xpack.security.enabled: true`. Anonymous access is rejected — `verify.sh` asserts a 401/403 rather than assuming it. |
 | Encryption in transit | TLS at the edge **and** on every internal hop (nginx→Elasticsearch and nginx→Kibana both use `proxy_ssl_verify on` against the internal CA). Plain HTTP is refused, not silently downgraded. |
-| Attack surface | Exactly one exposed port. Elasticsearch and Kibana bind to loopback / the private network and are demonstrably unreachable from outside — the test suite scans the ports and proves this rather than claiming it. |
+| Attack surface | Exactly one exposed port. Elasticsearch and Kibana bind to loopback / the private network and are unreachable from outside — the test suite proves it (a connection to 9200/5601 is refused, not assumed). |
 | Network boundary (cloud) | Default-deny inbound firewall; only 22 and 443 open (plus ICMP echo). Verified by scanning the public IP after deploy. |
 | Host hardening (cloud) | Root SSH login disabled, password authentication disabled, key-only access, non-root admin user — all applied by cloud-init at first boot, before configuration management connects. |
 | Container hardening (local) | Non-root users, all Linux capabilities dropped (`drop = ["ALL"]`), `no-new-privileges`, and a read-only root filesystem on nginx (with minimal tmpfs mounts). |
@@ -228,12 +225,6 @@ Moving to a hyperscaler means rewriting `terraform/` and leaving `ansible/` unto
 
 ## 5. Design decisions and testing
 
-### Tooling and ownership
-
-I use AI assistants in my daily engineering work and did so here. The division was deliberate: the architecture, the layer boundaries between Terraform and Ansible, the security posture, and every design decision documented above are mine. I used the tooling to accelerate implementation and to run the repetitive edit-test-fix loop, using a stronger model for structural reasoning and a faster one for iteration.
-
-Every failure encountered during testing was diagnosed against my own understanding of the stack rather than by accepting a generated patch. Every choice in this repository is one I can defend and would make again.
-
 ### Key decisions
 
 Each row is a decision I made on purpose, the reason for it, and the alternative I rejected.
@@ -263,6 +254,10 @@ Both targets were deployed from a clean state and verified end to end. Captured 
 
 **Failure paths** are tested without provisioning anything — that is the point of preflight: an invalid token, a read-only token, a missing or wrong-permission SSH key, and a non-empty project are all caught before a single billable API call.
 
+### Tooling and ownership
+
+I use AI assistants in my daily engineering work and did so here. The division was deliberate: the architecture, the layer boundaries between Terraform and Ansible, the security posture, and every design decision above are mine. I used the tooling to accelerate implementation and to run the repetitive edit-test-fix loop — a stronger model for structural reasoning, a faster one for iteration. Every failure during testing was diagnosed against my own understanding of the stack rather than by accepting a generated patch. Every choice in this repository is one I can defend and would make again.
+
 ---
 
 ## 6. Troubleshooting
@@ -288,7 +283,7 @@ The current solution is intentionally right-sized for the challenge. The natural
 1. **Multi-node clustering and high availability.** A three-node Elasticsearch cluster with dedicated master/data roles and replica shards, so the stack survives the loss of any one node. Largely an inventory and settings change, since the roles are inventory-driven.
 2. **CI/CD pipeline integration.** Wire the existing lint, preflight, deploy, verify, and idempotency gates into a pipeline (for example GitHub Actions) that runs the full suite on every push.
 3. **External secrets management.** Replace the deploy-time generated secrets with **HashiCorp Vault** or a cloud secrets manager, for centralized rotation, auditing, and access control.
-4. **Publicly trusted certificates via ACME.** For an internet-facing deployment with a real domain, swap the internal CA for automatically issued and renewed **Let's Encrypt** certificates, keeping HTTPS end to end.
+4. **Publicly trusted certificates via ACME.** Not implemented today — it would be a change in the `ca`/`nginx` roles. For an internet-facing deployment with a real domain, swap the internal CA for automatically issued and renewed **Let's Encrypt** certificates, keeping HTTPS end to end.
 5. **Backups, monitoring, and observability.** Automated snapshot/restore for Elasticsearch, audit logging, and shipping metrics and logs to a monitoring stack with alerting.
 
 ---
