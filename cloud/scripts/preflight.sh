@@ -16,7 +16,7 @@ MIN_ANSIBLE_VERSION="2.15.0"
 
 PROJECT_PREFIX="$(read_tfvar project_prefix elk-cloud)"
 LOCATION="$(read_tfvar location nbg1)"
-SERVER_TYPE="$(read_tfvar server_type cx32)"
+SERVER_TYPE="$(read_tfvar server_type cx33)"
 SERVER_IMAGE="$(read_tfvar server_image ubuntu-24.04)"
 SSH_PUB="$(read_tfvar ssh_public_key_path "${HOME}/.ssh/id_ed25519.pub")"
 SSH_KEY="$(read_tfvar ssh_private_key_path "${HOME}/.ssh/id_ed25519")"

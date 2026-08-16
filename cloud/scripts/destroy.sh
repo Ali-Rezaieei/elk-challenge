@@ -43,9 +43,14 @@ collect_diagnostics() {
   ssh "${ssh_opts[@]}" "${ADMIN_USER}@${ip}" 'sudo journalctl -u kibana --no-pager'        >"${dir}/kibana.journal.log" 2>&1 || true
   ssh "${ssh_opts[@]}" "${ADMIN_USER}@${ip}" 'sudo tail -n 500 /var/log/nginx/error.log'   >"${dir}/nginx.error.log" 2>&1 || true
   ssh "${ssh_opts[@]}" "${ADMIN_USER}@${ip}" 'sudo cat /var/log/cloud-init-output.log'      >"${dir}/cloud-init-output.log" 2>&1 || true
+  ssh "${ssh_opts[@]}" "${ADMIN_USER}@${ip}" 'sudo cat /var/log/cloud-init.log'             >"${dir}/cloud-init.log" 2>&1 || true
   ssh "${ssh_opts[@]}" "${ADMIN_USER}@${ip}" 'sudo tail -n 500 /var/log/elasticsearch/*.log' >"${dir}/elasticsearch.app.log" 2>&1 || true
   log_ok "Diagnostics saved to ${dir}"
 }
+
+# Capture the IP before destroy so we can purge its host key afterwards
+# (Hetzner reuses IPs; a stale known_hosts entry breaks the next deploy).
+DESTROYED_IP="$( (cd "$TF_DIR" && terraform output -raw server_ipv4 2>/dev/null) || true )"
 
 [ "$DIAG" = "true" ] && collect_diagnostics
 
@@ -112,6 +117,11 @@ if [ "$PURGE" = "true" ]; then
   log_ok "Generated material removed. Next deploy starts from zero."
 else
   log_info "Kept generated certs/secrets/state (reused next deploy). Use --purge-generated for a true cold start."
+fi
+
+# Drop the destroyed server's host key so a future deploy on a reused IP is clean.
+if [ -n "${DESTROYED_IP:-}" ] && [ -f "$KNOWN_HOSTS" ]; then
+  ssh-keygen -R "$DESTROYED_IP" -f "$KNOWN_HOSTS" >/dev/null 2>&1 || true
 fi
 
 log_ok "Teardown complete."

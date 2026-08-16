@@ -84,7 +84,7 @@
   ansible.builtin.copy:
     dest: "{{ es_config_dir }}/jvm.options.d/heap.options"
     content: |
-      # {{ ansible_managed }}
+      # Managed by Ansible - do not edit by hand.
       -Xms{{ elasticsearch_heap_size }}
       -Xmx{{ elasticsearch_heap_size }}
     owner: root
@@ -112,6 +112,13 @@
 # bootstrap.password is consumed on the FIRST start, when the security index is
 # created. Setting it here keeps the secret out of Terraform state and out of
 # the service environment. Guarded so re-runs are a no-op.
+- name: Ensure the Elasticsearch keystore exists
+  ansible.builtin.command:
+    cmd: /usr/share/elasticsearch/bin/elasticsearch-keystore create
+    creates: "{{ es_config_dir }}/elasticsearch.keystore"
+  environment:
+    ES_PATH_CONF: "{{ es_config_dir }}"
+
 - name: Seed the elastic bootstrap password into the ES keystore (first run only)
   ansible.builtin.shell: |
     set -euo pipefail

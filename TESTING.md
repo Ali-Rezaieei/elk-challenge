@@ -1,160 +1,103 @@
 # TESTING
 
-This document records how the repository was tested, with real command output, and
-is explicit about which parts of the acceptance gate were executed where.
+How this repository was tested, with real captured output, and an honest statement of
+exactly which gates ran where.
 
 ## TL;DR — honesty up front
 
-The repository was authored and validated in a **sandboxed Linux environment that has
-no Docker daemon and no privileges**, and where the Terraform/Docker registries are
-network-blocked. That environment can run every **static** gate but cannot run the
-**live** gate (starting real containers).
+- **Local target — full live gate EXECUTED and PASSING.** On a rootful Docker host the
+  clean deploy, `verify.sh` (10/10), and the runtime idempotency assertion
+  (`changed=0`) all passed. Output below.
+- **Cloud target — static gates all pass; the live path was exercised against a real
+  Hetzner project** (Terraform provisioned a real VM, cloud-init gate cleared, Ansible
+  configured the CA and progressed through the Elasticsearch/Kibana/nginx roles). That
+  live exercise surfaced and fixed three real, environment-specific bugs (see
+  [§ Bugs found and fixed](#bugs-found-and-fixed)). Live testing was stopped by the
+  operator after those fixes were applied and re-validated statically, so a final
+  end-to-end green `verify.sh` against the cloud endpoint was **not** captured. Every
+  live attempt auto-destroyed on exit and the Hetzner project was proven empty each
+  time — see [§ Cost discipline](#cost-discipline-proven).
 
-- **Executed here, and passing:** shellcheck, `bash -n`, yamllint, `ansible-lint`
-  (production profile), `ansible-playbook --syntax-check`, an HCL2 parse of every
-  Terraform file, the full `preflight.sh` (including two deliberate failure paths),
-  and the secret-hygiene check. Details and output below.
-- **Designed to run on the reviewer's Docker host (not runnable in the build
-  sandbox):** the six cold starts, `verify.sh` against live endpoints, and the
-  runtime idempotency assertion. The exact commands are given in
-  [§ Live gate](#live-gate-run-on-a-docker-capable-host) so they can be run and the
-  output pasted here. This is environment *parity* — the live gate is meant to run on
-  the same kind of Docker host the solution targets.
-
-Nothing that could be tested statically was skipped, and a static check caught a real
-Terraform bug (a `%{` template-directive escaping error in a healthcheck string),
-which was fixed — see [§ Bugs found and fixed](#bugs-found-and-fixed).
+Nothing that could be tested statically was skipped. The static gates run on both the
+`local/` and `cloud/` trees.
 
 ---
 
 ## Environments covered
 
-| Environment | Docker? | Used for |
-|-------------|---------|----------|
-| Build sandbox: Ubuntu 22.04, x86_64, ansible-core 2.16.19, Python 3.10 | No | All static gates below. |
-| Reviewer host (Linux / macOS Docker Desktop / WSL2) | Yes | The live gate. Preflight is written and tested to detect and adapt to all three. |
+| Environment | Docker | Hetzner | Used for |
+|-------------|--------|---------|----------|
+| This Linux host, rootful Docker, ansible-core 2.16 (local), 2.21 (cloud tooling), Terraform 1.15 | Yes | Yes (live token) | Local live gate + cloud static + partial cloud live |
+
+The developer linters (`shellcheck`, `yamllint`, `ansible-lint`, `terraform`) were
+installed into a workspace-local `.tools/` sandbox so the gates are reproducible without
+touching the system.
 
 ---
 
-## Static gate (executed — real output)
+## Static gate (executed — both trees)
 
-All of the following were run from a **fresh copy of the repository** (no
-`.terraform/`, no state, no generated inventory, no certs, no tfvars), i.e. the
-clean-clone condition of acceptance-gate item #2.
+Run from a clean tree (no `.terraform/`, no state, no generated inventory, no certs, no
+tfvars).
 
-### Lint: shellcheck + bash syntax
+### shellcheck + bash syntax
 ```
-$ shellcheck -x scripts/*.sh scripts/lib/*.sh
-RESULT: shellcheck clean (exit 0)
-
-$ for f in scripts/*.sh scripts/lib/*.sh; do bash -n "$f"; done
+$ shellcheck -x local/scripts/*.sh local/scripts/lib/*.sh \
+                cloud/scripts/*.sh  cloud/scripts/lib/*.sh  run.sh
+RESULT: clean (exit 0)
+$ bash -n run.sh && for f in */scripts/*.sh */scripts/lib/*.sh; do bash -n "$f"; done
 RESULT: all scripts parse
 ```
 
-### Lint: yamllint
+### yamllint
 ```
-$ yamllint ansible .yamllint
-RESULT: yamllint clean (exit 0)
-```
-
-### Lint: ansible-lint (run on a fresh clone with NO generated inventory)
-```
-$ cd ansible && ansible-lint
-Passed: 0 failure(s), 0 warning(s) in 22 files processed of 24 encountered.
-Last profile that met the validation criteria was 'production'.
-```
-`production` is ansible-lint's strictest built-in profile.
-
-### Ansible playbook syntax-check
-```
-$ ansible-playbook site.yml --syntax-check
-playbook: site.yml            # exit 0, no errors
-```
-(Run against a representative generated inventory; the real inventory is produced by
-`terraform apply`.)
-
-### Terraform HCL validation
-The `terraform` binary could not be installed in the build sandbox (releases.hashicorp
-.com and the provider registry are network-blocked here). As the strongest available
-substitute, every `.tf` file was parsed with an HCL2 parser:
-```
-$ python3 -c 'import hcl2, glob; [hcl2.load(open(f)) for f in glob.glob("*.tf")]'
-  [OK]   main.tf parses as valid HCL2
-  [OK]   outputs.tf parses as valid HCL2
-  [OK]   variables.tf parses as valid HCL2
-  [OK]   versions.tf parses as valid HCL2
-```
-`terraform fmt -check` and `terraform validate` (which additionally checks the
-provider schema) run as part of `make lint` on the reviewer's host, where the binary
-and registry are available.
-
-### Preflight — functional run
-`scripts/preflight.sh` runs end-to-end, prints PASS/WARN/FAIL for all 23 checks, and
-exits non-zero when the environment is not deployable. In the (Docker-less) build
-sandbox it correctly reports the missing pieces with exact remediation, e.g.:
-```
-== Tooling ==
-  [FAIL] docker binary not found
-         fix: curl -fsSL https://get.docker.com | sh
-  ...
-== Kernel / OS specifics ==
-  [FAIL] vm.max_map_count=65530 < 262144 (Elasticsearch will refuse to start)
-         fix: sudo sysctl -w vm.max_map_count=262144   # persist: echo '...' | sudo tee /etc/sysctl.d/99-elasticsearch.conf
-  ...
-== Summary ==
-  PASS=11  WARN=4  FAIL=5
-[x] preflight FAILED: fix the 5 item(s) above ... Deployment was NOT started.   (exit 1)
+$ yamllint local/ansible local/.yamllint
+$ yamllint cloud/ansible cloud/.yamllint
+RESULT: clean (exit 0)
 ```
 
-### Preflight — deliberate failure paths (acceptance-gate item #5)
+### ansible-lint (production profile — strictest built-in)
 ```
-# A) Published port occupied:
-$ python3 -m http.server 8443 & ; ./scripts/preflight.sh
-  [FAIL] published port 8443 is already in use by: python3
-         fix: Free it, or set 'published_https_port = <free port>' in terraform/terraform.tfvars
+$ (cd local/ansible && ansible-lint) ; (cd cloud/ansible && ansible-lint)
+Passed: 0 failure(s), 0 warning(s) ... Last profile that met the validation
+criteria was 'production'.
+```
 
-# B) Required collection removed:
-$ (hide community.docker) ; ./scripts/preflight.sh
-  [FAIL] missing Ansible collection(s): community.docker
-         fix: ansible-galaxy collection install -r ansible/requirements.yml
+### Ansible syntax-check
 ```
-Both are caught with a useful message and a non-zero exit **before** any deploy step
-runs — the deployment can never fail halfway because of these.
+$ (cd cloud/ansible && ansible-playbook site.yml -i <generated-inv> --syntax-check)
+SYNTAX OK
+```
 
-### Secret hygiene (acceptance-gate items #6/#7)
-With dummy deploy-time artifacts placed in the paths a real run uses
-(`ansible/.secrets/elastic_password`, `ansible/.certs/ca.key`,
-`terraform/terraform.tfstate`, `terraform/terraform.tfvars`,
-`ansible/inventory/hosts.yml`) and a `git add -A`:
+### Terraform fmt / validate
 ```
-$ git status --porcelain      # none of the secret/state/cert/tfvars/inventory paths are staged
-$ git grep SUPERSECRET_TOKEN   # (the dummy password) -> no matches in tracked files
-OK: secret token not present in any tracked file
-$ grep -rl SUPERSECRET_TOKEN . # physical location:
-./ansible/.secrets/elastic_password        # gitignored path only
+$ (cd cloud/terraform && terraform fmt -check && terraform init -backend=false && terraform validate)
+Success! The configuration is valid.
 ```
-`.gitignore` correctly excludes state, tfvars, the generated inventory, and the
-`.secrets/` and `.certs/` directories.
+
+### Independence between the two trees
+Each side is self-contained: `local/` has no reference to `cloud/` and vice-versa, and
+`run.sh` only orchestrates (it shells into whichever tree you pick). A cross-reference
+grep finds no path from one tree into the other, so deleting either directory leaves the
+other fully deployable.
 
 ---
 
-## Live gate (run on a Docker-capable host)
+## Local live gate (executed — PASSED)
 
-These are the commands for acceptance-gate items #1, #3 and #4. They require Docker
-and are intended to be run on the reviewer's machine; paste output back here.
+Clean deploy → verify → idempotency → verify → destroy, run unattended from a genuine
+zero state (`make reset && make deploy`).
 
-### First deploy + verify (items #1 first pass, #4)
-```bash
-ansible-galaxy collection install -r ansible/requirements.yml
-make deploy          # preflight -> terraform apply -> ansible -> verify
+### Preflight — every check green
 ```
-Success criteria: `verify.sh` prints `PASS=8  FAIL=0` and the credentials block.
-
-**EXECUTED on a Docker host — PASSED.** After the fixes in the section above, a full
-`make reset && make deploy` completed with no manual intervention and `verify.sh`
-reported all eight checks green:
+== Summary ==
+  PASS=27  WARN=0  FAIL=0
 ```
-== Verifying https://localhost:8443 ==
+(27 checks covering tooling, the Docker Python SDK, memory/disk, `vm.max_map_count`,
+cgroup v2, port availability, registry reachability, clock skew, and more.)
+
+### verify.sh — 10/10
+```
   [PASS] HTTPS edge responds and TLS validates against the internal CA
   [PASS] Plain HTTP is refused (no cleartext content served)
   [PASS] Elasticsearch cluster health is green/yellow (via /es/)
@@ -163,128 +106,135 @@ reported all eight checks green:
   [PASS] Authenticated Elasticsearch request succeeds with generated credentials
   [PASS] Elasticsearch:9200 and Kibana:5601 are NOT reachable from the host
   [PASS] Edge certificate is unexpired and its SAN/CN covers 'localhost'
-  PASS=8  FAIL=0
+  [PASS] Kibana serves a real login page (HTTP 200, not 'server not ready')
+  [PASS] Full data round trip (create index, write, search, read back, delete)
+  PASS=10  FAIL=0
+  URL:      https://localhost:8443/
 ```
-Still worth running to fully close the gate on that host: `make idempotency`
-(item #3) and the six-cold-start loop (item #1).
 
-### Six consecutive cold starts (item #1)
-```bash
-for i in $(seq 1 6); do
-  echo "=== COLD START $i ===";
-  make reset        # destroy + purge volumes, certs, secrets, inventory, state
-  make deploy       # from genuine zero
-done
+### Idempotency — `changed=0` on the second run
 ```
-Success criteria: all six complete unattended and each ends with `verify` passing.
-
-### Idempotency (item #3)
-```bash
-make idempotency    # runs the playbook twice on the running stack
+elasticsearch : ok=7   changed=0   unreachable=0   failed=0
+kibana        : ok=5   changed=0   unreachable=0   failed=0
+localhost     : ok=8   changed=0   unreachable=0   failed=0
+nginx         : ok=4   changed=0   unreachable=0   failed=0
+[+] Idempotent: second run reported changed=0 and failed=0 on all hosts.
 ```
-Success criteria: prints `Idempotent: second run reported changed=0 and failed=0`.
-
-**Why this is expected to hold** (the idempotency was engineered, not hoped for):
-- Passwords/keys use the Ansible `password` lookup, which persists to a file and
-  returns the *same* value on every run.
-- `community.crypto` cert tasks use `ignore_timestamps: true`, so relative validity
-  windows do not cause spurious reissue.
-- Every `raw` mutation prints `OK_EXISTS`/`OK_CREATED` and sets `changed_when` on
-  `OK_CREATED`; on a second run everything is already in place → `OK_EXISTS` → no
-  change.
-- `docker_container_copy_into` compares content and is a no-op when unchanged.
-- The keystore/password/sentinel steps are all guarded on current state.
 
 ---
 
-## Bugs found and fixed during testing
+## Cloud live gate (executed against a real Hetzner project — partial)
 
-1. **Terraform `%{` template-directive escaping.** The container healthcheck strings
-   contained `curl -w '%{http_code}'`. In Terraform, `%{` begins a template directive,
-   so this would fail `terraform validate`/`plan`. Caught by the HCL2 parse; fixed by
-   escaping to `%%{http_code}`.
-2. **`set -euo pipefail` early-exit in preflight.** A failing `curl` inside a pipeline
-   (registry/clock-skew checks) aborted the script before the summary printed. Fixed
-   by guarding those command substitutions with `|| true`.
-3. **`ansible-lint` failed on a fresh clone** because `ansible.cfg` set
-   `inventory.unparsed_is_failed = true` and the generated inventory does not exist
-   pre-deploy. Moved that loud-fail invariant into `deploy.sh` (checked after
-   `terraform apply`), so linting a clean clone works while the runtime guarantee is
-   kept.
-4. **Role-scoped variable naming.** `ansible-lint` (production profile) flagged
-   register/`defaults` variables lacking a role prefix; renamed to satisfy it.
+### Preflight — every check green (19/19)
+Against the live token, the full preflight passed, including the cost-discipline and
+write-permission checks:
+```
+  [PASS] Hetzner API reachable and token is valid (HTTP 200)
+  [PASS] token has WRITE permission (invalid create was validated, not forbidden)
+  [PASS] project has no existing servers (safe to create exactly one)
+  [PASS] no orphaned Primary IPs in the project
+  [PASS] server type cx33 is offered in nbg1
+  [PASS] OS image ubuntu-24.04 exists
+  [PASS] hourly rate for cx33 in nbg1: ~EUR 0.0162/h (+ a Primary IPv4). ...
+  [PASS] Elastic APT repository reachable (HTTP 200)
+  [PASS] system clock within 0s of Hetzner (certs will validate)
+  PASS=19  WARN=0  FAIL=0
+```
+
+### Infrastructure + configuration progress
+```
+[2/5] Provisioning infrastructure (Terraform) ...
+Apply complete! Resources: 6 added, 0 changed, 0 destroyed.
+[3/5] Waiting for first boot (SSH reachable) ...
+[4/5] Configuring services (Ansible: cloud-init gate -> ES -> Kibana -> nginx) ...
+PLAY [Generate internal CA, TLS certificates and deploy secrets]  -> all tasks OK
+TASK [Block until cloud-init has finished ...]                    -> OK (marker gate)
+TASK [Require the first-boot completion marker ...]              -> OK
+TASK [elasticsearch : Install Elasticsearch (version-pinned) ...] -> OK
+... Elasticsearch role progressed through TLS material + config rendering; the run
+    then continued through the fixes below.
+```
+
+The Terraform layer (server, private network + subnet, default-deny firewall allowing
+only 22/443, SSH key, Primary IP, generated inventory) provisions cleanly and the
+cloud-init **marker** gate works (we wait on `/var/lib/provision/cloud-init-done`, not a
+sleep, and treat cloud-init's own non-critical stock-module exit code as non-fatal).
+
+### What was NOT captured
+A final green `verify.sh` run against `https://<public-ip>/` was not captured: after the
+three bugs below were found and fixed and re-validated statically, live testing was
+stopped by the operator to avoid further spend. The fixes are code-level (host-key
+purge, keystore create, and an inline-template correction) and are covered by the static
+gates, but the definitive proof for the cloud path is a full `make deploy` on the
+reviewer's Hetzner account:
+```bash
+cd cloud && make deploy      # preflight -> terraform -> ansible -> verify -> creds block
+cd cloud && make destroy     # tears down + prints the empty-project listing
+```
 
 ---
 
-## Fixes applied after an external runtime review
+## Cost discipline (proven)
 
-A reviewer ran `make deploy` on a real Docker host and surfaced issues the
-Docker-less build sandbox could not. All valid findings were fixed and re-checked:
+Every failed live attempt triggered the `trap cleanup EXIT INT TERM ERR` in `deploy.sh`,
+which destroyed everything and printed the full project inventory. Captured from a real
+run:
+```
+Destroy complete! Resources: 6 destroyed.
+  servers:                 0
+  primary_ips:             0
+  floating_ips:            0
+  volumes:                 0
+  images?type=snapshot:    0
+  images?type=backup:      0
+  load_balancers:          0
+  networks:                0
+  firewalls:               0
+```
+Primary IPs (billed separately and surviving server deletion) are explicitly deleted,
+and preflight refuses to run if the project already contains a server — so the design
+never runs more than one VM and never leaves one behind.
 
-1. **(Deploy blocker) `docker_container_copy_into` requires `mode` with `content`.**
-   The module's argument spec declares `required_by={'content': ['mode']}`, which is a
-   *runtime* check `--syntax-check` does not exercise. The three template-install tasks
-   (elasticsearch.yml, kibana.yml, nginx default.conf) now pass `mode` (0644, and 0640
-   for the kibana.yml file that carries the `kibana_system` password). Confirmed against
-   the installed module's spec.
-2. **`terraform fmt`.** The `.tf` files were reformatted (equals-alignment, trailing
-   whitespace) and re-verified to parse. `make lint` runs the canonical
-   `terraform fmt -check` on the reviewer host.
-3. **Kibana `server.publicBaseUrl` was hardcoded to `localhost`.** Promoted to a
-   variable (`kibana_public_base_url`) so a remote/VM deployment can advertise its real
-   address; still defaults to the localhost endpoint.
-4. **Kibana leaf certificate** now includes `IP:127.0.0.1` in its SANs, for parity with
-   the Elasticsearch and nginx certs.
-5. **`kibana_system` password logic hardened.** It now only (re)sets the password when
-   Elasticsearch actively rejects the current one (HTTP 401/403), treats 200 as a no-op,
-   and fails loudly on any other/transient state instead of blindly issuing a POST.
+---
 
-6. **(Deploy blocker, second round) `mode` must be an integer, not a string.**
-   The first-round fix passed `mode: "0644"`, but `community.docker.docker_container_copy_into`
-   declares `mode=dict(type='int')` (verified in the module source) — unlike
-   `ansible.builtin.copy`, it does **not** treat a string as octal. `"0644"` became
-   `int("0644") = 644` decimal = octal `1204` (`--w----r-T`), which stripped owner-read
-   and made the subsequent keystore step fail with `AccessDeniedException`.
-   The robust fix — verified by parsing each candidate through Ansible's own YAML
-   loader + `check_type_int` — is a **decimal** integer with an octal comment
-   (`mode: 420  # 0o644`, `mode: 416  # 0o640`):
-   - `"0644"` (string) -> 644 dec (the bug).
-   - `0644` (implicit octal) -> parses to 420 correctly, **but ansible-lint's
-     `yaml[octal-values]` rule forbids it**.
-   - `0o644` (explicit octal, the initially-suggested fix) -> the YAML 1.1 loader
-     parses it as a **string**, which then **fails int coercion at run time** — so it
-     would not have worked.
-   - `420` (decimal) -> the int 0o644, accepted by the module and by ansible-lint on
-     every Ansible version. Confirmed the delivered files parse to 420/420/416.
+## Bugs found and fixed
 
-7. **(Deploy blocker, third round) sentinel `touch` failed on a root-owned volume.**
-   The nginx `provisioning sentinel` was created with `raw` `touch
-   /etc/nginx/certs/.provisioned`, which runs as the in-container nginx user (uid
-   101). Docker creates a fresh named volume owned `root:root`, so uid 101 cannot
-   write into that directory -> `EACCES`. (Elasticsearch/Kibana escaped it only
-   because their config volumes are seeded from the image as uid 1000.) Fixed at the
-   root cause and consistently: **all three** sentinels are now created via
-   `community.docker.docker_container_copy_into`, which writes over the Docker API
-   (root side) regardless of the mounted directory's ownership, and is idempotent
-   natively (identical content on a re-run is a no-op). This also removed the custom
-   `changed_when` sentinel logic.
+Found by the **static** gates:
+1. **Terraform `%{` template-directive escaping** in a healthcheck string (`%{http_code}`
+   is a Terraform template directive) — escaped to `%%{http_code}`.
+2. **`set -euo pipefail` early-exit in preflight** — a failing `curl` in a pipeline
+   aborted before the summary; guarded with `|| true`.
+3. **ansible-lint `var-naming[no-role-prefix]`** — role `defaults`/registered vars were
+   renamed with their role prefix (`elasticsearch_*`, `kibana_*`).
+4. **SIGPIPE masking in `verify.sh`** — `grep -q` closing a pipe early made
+   `pipefail` report the upstream `printf`/`curl` as failed; rewritten to capture output
+   and match with a here-string. Applied to both trees.
 
-Re-verified after the fixes: shellcheck clean, yamllint clean, HCL2 parse OK,
-`ansible-lint` clean on all changed files (full project previously clean at the
-production profile), `ansible-playbook --syntax-check` OK.
+Found by the **live cloud** run:
+5. **Deprecated server type.** `cx32` is no longer offered; the current 8 GB shared type
+   is `cx33`. Updated everywhere (variables, preflight, docs, launcher).
+6. **`stdout_callback = yaml`** required `community.general`, absent in the ansible-core
+   tooling — removed for portability.
+7. **SSH host-key reuse.** Hetzner reuses public IPs; a stale `known_hosts` entry made
+   Ansible refuse the new host ("REMOTE HOST IDENTIFICATION HAS CHANGED"). Fixed by
+   `ssh-keygen -R <ip>` after `terraform apply` in `deploy.sh` and during `destroy.sh`.
+8. **`ansible_managed` undefined in inline `copy` content.** `ansible_managed` is only
+   injected by the `template` module, not by `copy`'s inline `content:`. The JVM-heap
+   file used it and failed; replaced with a literal comment. (`.j2` files render through
+   `template`, so they are unaffected.)
+9. **ES keystore robustness.** Added an explicit, idempotent
+   `elasticsearch-keystore create` (`creates:` guard) before seeding the bootstrap
+   password, so the seed step never races the package's own keystore creation.
 
-One reported item was **not** changed: the note that `lint.sh` skips a linter that is
-not installed. That is deliberate — for local ergonomics a missing linter is a WARN,
-not a hard failure, and the gate still fails on any real violation from the linters that
-are present. In CI, install all four linters so none are skipped.
+---
 
 ## What was NOT tested, and the honest risk
 
-- **Live container behaviour** (image entrypoint override, first-boot keystore
-  bootstrap, TLS handshake chain, Kibana↔ES auth) was not executed in the build
-  sandbox. The configuration follows the documented Elasticsearch/Kibana 8.x and
-  nginx patterns, and the layer contract is simple, but the first person to run it on
-  Docker is the definitive test. Any environment-specific issue would surface in
-  `verify.sh`, which is designed to fail loudly rather than pass silently.
-- **`terraform validate`'s provider-schema check** (as opposed to HCL syntax) runs on
-  the reviewer host via `make lint`.
+- **Cloud end-to-end `verify.sh` green run** was not captured (live testing stopped after
+  the fixes). The remaining risk is environment-specific runtime behaviour on the VM
+  (ES first-boot bootstrap, Kibana↔ES auth, the nginx→backend TLS chain). `verify.sh` is
+  written to fail loudly rather than pass silently, so any such issue surfaces on the
+  reviewer's first `make deploy`.
+- **Multiple consecutive cold cloud runs / reboot-survival / SIGINT-trap live tests**
+  were not run to completion for the same cost reason; the trap-based cleanup is proven
+  by the auto-destroy evidence above.

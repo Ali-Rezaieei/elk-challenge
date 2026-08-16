@@ -35,6 +35,13 @@ crash.*.log
 cloud/.env
 cloud/diagnostics/
 
+# Local developer tooling / live-gate scratch (never commit).
+.tools/
+.gate_home/
+
+# Stale host-key backups left by ssh-keygen -R
+**/.ssh_known_hosts.old
+
 # OS / editor noise.
 .DS_Store
 Thumbs.db

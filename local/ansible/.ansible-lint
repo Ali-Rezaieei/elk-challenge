@@ -1,0 +1,5 @@
+---
+# Vendored collections are installed at deploy time (gitignored); never lint
+# third-party collection internals - only this project's own content.
+exclude_paths:
+  - collections/

@@ -101,6 +101,11 @@ PROVISIONED=1   # from here on, an abort must destroy
 SERVER_IP="$( (cd "$TF_DIR" && terraform output -raw server_ipv4) )"
 log_ok "Server provisioned at ${SERVER_IP}; inventory generated from state."
 
+# Hetzner reuses public IPs across servers. Purge any stale host key for this IP
+# so accept-new records the fresh one instead of refusing a "changed" host.
+KNOWN_HOSTS="${ANS_DIR}/.ssh_known_hosts"
+ssh-keygen -R "$SERVER_IP" -f "$KNOWN_HOSTS" >/dev/null 2>&1 || true
+
 printf '\n%s[3/5] Waiting for first boot (SSH reachable) ...%s\n' "$C_BOLD" "$C_RESET"
 # Bounded wait for the SSH port; Ansible then gates authoritatively on the
 # cloud-init completion signal (never a bare sleep).

@@ -4,7 +4,7 @@
 
 # project_prefix = "elk-cloud"
 # location       = "nbg1"          # or fsn1 / hel1 (German/EU zones)
-# server_type    = "cx32"          # cheapest shared-vCPU with 8 GB RAM
+# server_type    = "cx33"          # shared-vCPU with 8 GB RAM (Intel, 4 vCPU)
 # server_image   = "ubuntu-24.04"
 
 # Lock the firewall down to your own IP for real use (defaults are open so a

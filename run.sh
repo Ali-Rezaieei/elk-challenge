@@ -212,7 +212,7 @@ ensure_ssh_key() {
 confirm_cost() {
   cat >&2 <<EOF
 
-${C_BOLD}About to create a real Hetzner server (cx32, 8 GB).${C_RESET}
+${C_BOLD}About to create a real Hetzner server (cx33, 8 GB).${C_RESET}
   - Cost is roughly EUR 0.02-0.03 per hour, including a Primary IPv4.
   - A deploy + short test + destroy cycle costs only a few cents.
   - It will keep billing until you run Destroy.
@@ -228,6 +228,20 @@ confirm_generic() { # confirm_generic "message"  -> 0 to proceed
   printf '%s%s [Y/n]: %s' "$C_BOLD" "$1" "$C_RESET" >&2
   local s; IFS= read -r s || true
   case "$(lower "${s:-}")" in n|no) return 1 ;; *) return 0 ;; esac
+}
+
+confirm_destroy_on_exit() { # target -> 0 if the user wants to tear down now
+  # Default is NO so nobody destroys a stack by accidentally hitting Enter, but
+  # we always ASK - especially for cloud, which keeps billing if left up.
+  local t="$1" prompt
+  if [ "$t" = "cloud" ]; then
+    prompt="Destroy the cloud server now so it stops billing?"
+  else
+    prompt="Destroy the local deployment now to free resources?"
+  fi
+  printf '%s%s [y/N]: %s' "$C_BOLD" "$prompt" "$C_RESET" >&2
+  local s; IFS= read -r s || true
+  case "$(lower "${s:-}")" in y|yes) return 0 ;; *) return 1 ;; esac
 }
 
 result_block() { # target
@@ -276,6 +290,11 @@ EOF
           ok "Destroyed."; return 0
         fi ;;
       q|Q)
+        # Before leaving, actively offer teardown so nothing is left behind.
+        if confirm_destroy_on_exit "$t"; then
+          CLOUD_OP_ACTIVE=1; run_make "$t" destroy; CLOUD_OP_ACTIVE=0
+          ok "Destroyed."; return 0
+        fi
         if [ "$t" = "cloud" ] && cloud_exists; then
           warn "The cloud server is STILL RUNNING and still billing."
           warn "Tear it down with:  ./run.sh  ->  2) Cloud  ->  Destroy"

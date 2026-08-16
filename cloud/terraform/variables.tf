@@ -27,9 +27,9 @@ variable "location" {
 }
 
 variable "server_type" {
-  description = "Server type. Cheapest shared-vCPU with 8 GB RAM (ES + Kibana need it). cx32 = 4 vCPU / 8 GB (Intel)."
+  description = "Server type. Shared-vCPU with 8 GB RAM (ES + Kibana need it). cx33 = 4 vCPU / 8 GB (Intel)."
   type        = string
-  default     = "cx32"
+  default     = "cx33"
 }
 
 variable "server_image" {

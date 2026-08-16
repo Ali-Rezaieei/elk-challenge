@@ -36,12 +36,30 @@
         timeout: 300
         sleep: 5
 
-    - name: Wait for cloud-init to finish (gate on the signal, not a sleep)
+    - name: Block until cloud-init has finished (any final state)
       ansible.builtin.command: cloud-init status --wait
       register: cloudinit
-      # 0 = done; 2 = done with recoverable warnings (newer cloud-init).
-      failed_when: cloudinit.rc not in [0, 2]
       changed_when: false
+      # Do not fail on the exit code: a stock module we do not depend on can
+      # flip the global status to "error" while our bootstrap still completed.
+      # The marker below is the authoritative readiness gate.
+      failed_when: false
+
+    - name: Require the first-boot completion marker (authoritative readiness gate)
+      ansible.builtin.wait_for:
+        path: /var/lib/provision/cloud-init-done
+        state: present
+        timeout: 300
+      # Present  => our runcmd finished (packages installed, sysctl applied) and
+      #             the box is ready for Ansible.
+      # Missing  => first boot genuinely did not complete; fail loudly here
+      #             rather than limping into a half-provisioned configuration.
+
+    - name: Record cloud-init's final status for the log
+      ansible.builtin.debug:
+        msg: >-
+          cloud-init reported '{{ cloudinit.stdout | default('unknown') | trim }}';
+          first-boot marker present, proceeding.
 
     - name: Gather facts now that the host is provisioned
       ansible.builtin.setup:

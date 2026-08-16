@@ -35,7 +35,7 @@ empty, and prints the hourly rate **before** anything is created.
 
 ## Cost
 
-The `cx32` server is roughly **EUR 0.02–0.03 per hour** including its Primary IPv4. A
+The `cx33` server is roughly **EUR 0.02–0.03 per hour** including its Primary IPv4. A
 deploy + test + destroy cycle costs only a few cents. **It bills until you destroy it.**
 
 ## What to expect on first access
