@@ -1,120 +1,170 @@
-# Elasticsearch + Kibana over HTTPS — Terraform builds it, Ansible configures it
+# Elasticsearch + Kibana over HTTPS — Automated with Terraform & Ansible
 
-## Quick start
+A single-node **Elasticsearch + Kibana** stack that comes up behind an **nginx TLS edge** and is reachable **only over HTTPS**. **Terraform** builds the infrastructure and **Ansible** configures the services. The whole thing is one command to deploy and one command to tear down, and it runs on your own machine with no cloud account required.
+
+---
+
+## 1. Quick Start (How to Run)
+
+You do not need to read the rest of this document to try it. Two commands bring the entire stack up.
+
+### The fastest path
+
+From the repository root:
 
 ```bash
-git clone <repo> && cd <repo>
 ./run.sh
 ```
 
-`./run.sh` asks whether to deploy **Local** (Docker on this machine) or **Cloud**
-(a Hetzner VM), then walks you through the rest — preflight, deploy, credentials,
-and teardown.
+`./run.sh` is an interactive launcher. It greets you, lets you pick **Local** (Docker on this machine — the default) or **Cloud** (a Hetzner VM), then runs everything for you: environment checks, deploy, credentials, and teardown. Press Enter to accept the defaults and you are done.
 
-## What this deploys
+### The direct path (Local)
 
-A single-node **Elasticsearch + Kibana** stack behind an **nginx TLS edge**, reachable
-only over **HTTPS**. **Terraform** provisions the infrastructure; **Ansible** configures
-the services (internal CA, TLS on every hop, security enabled, health-gated startup).
-The only thing passed between the two layers is a machine-generated inventory.
+If you prefer to run the steps yourself, the local target is completely self-contained:
 
-## The two targets
+```bash
+cd local
+ansible-galaxy collection install -r ansible/requirements.yml   # first run only
+make deploy
+```
 
-| Target | Needs | Cost | Time |
-|--------|-------|------|------|
-| Local | Docker + Terraform + Ansible | Free | ~5 min (first run) |
-| Cloud | Hetzner account + API token + SSH key | ~EUR 0.03/hour | ~5–8 min |
+`make deploy` does the full sequence on its own — it validates your machine, provisions the infrastructure with Terraform, configures the services with Ansible, and runs the test suite at the end. The first run takes about three to six minutes (image download and first boot); later runs take under two minutes.
 
-Each side is a **self-contained project**: `cd local && make deploy` and
-`cd cloud && make deploy` both work without the launcher, and either works if the
-other directory is deleted.
+When it finishes you will see the access details:
 
-## Prerequisites
+```
+URL:      https://localhost:8443/
+Username: elastic
+Password: <generated at deploy time>
+```
 
-| Tool | Minimum | Notes |
-|------|---------|-------|
-| Terraform | 1.5 | OpenTofu works too |
-| Ansible (`ansible-core`) | 2.15 | `pipx install ansible-core` |
-| Python 3 | 3.9 | Local also needs the `docker` SDK |
-| curl, openssl | any | used by preflight and verify |
-| Docker Engine | 20.10 | **Local only** |
-| SSH client + key | any | **Cloud only** (ed25519 recommended) |
+Open the URL, accept the certificate warning (the certificate is signed by a CA created on your machine, so this is expected), and log in.
 
-## Architecture
+### Everyday commands
+
+Every step is also available on its own, so a reviewer can inspect one thing at a time:
+
+| Command | What it does |
+|---------|--------------|
+| `make preflight` | Check the environment only — no deployment. Fails fast and prints the exact fix for any missing prerequisite. |
+| `make deploy` | Full deploy: preflight → Terraform → Ansible → verify. |
+| `make verify` | Run the functional and security checks against a running stack. |
+| `make idempotency` | Run Ansible twice and assert the second run reports `changed=0`. |
+| `make logs` | Tail recent logs from the three services. |
+| `make destroy` | Remove the containers, network, and volumes. |
+| `make reset` | Destroy **and** purge generated certs, secrets, and inventory for a true cold start. |
+
+> **Prerequisites (Local):** Docker Engine 20.10+, Terraform 1.5+ (OpenTofu also works), `ansible-core` 2.15+, Python 3 with the `docker` SDK, plus `make`, `curl`, and `openssl`. You do not need to check these by hand — `make preflight` runs a full battery of checks and tells you precisely what to fix. It also runs automatically inside `make deploy`.
+
+### Running against a real cloud (optional)
+
+The same stack also deploys to a Hetzner VM if you want to see it on public infrastructure:
+
+```bash
+export HCLOUD_TOKEN=<your Read & Write token>   # or let ./run.sh prompt you
+cd cloud
+make deploy
+```
+
+Here the only public port is `443`, protected by a default-deny firewall. Preflight validates the token, confirms it has write permission, checks the project is empty, and prints the hourly rate **before** anything is created. Remember to run `make destroy` when you are done, as a live server keeps billing.
+
+---
+
+## 2. Architecture & Features
+
+The design rests on one clean idea: **Terraform decides what exists, and Ansible decides how it is configured.** The only thing that passes between the two layers is a machine-generated inventory. That boundary keeps each layer small and testable, and it is what makes the same solution portable from Docker to any cloud provider.
+
+### The request path
 
 ```
                  client (browser / curl)
                           |
-                    HTTPS (:443 cloud / :8443 local)   <- the only open port
+                    HTTPS only  (:8443 local  /  :443 cloud)   <- the one open port
                           |
                     +-----v------+
-                    |   nginx    |  TLS termination + reverse proxy
+                    |   nginx    |   TLS termination + reverse proxy
                     +--+------+--+
                  "/" |      | "/es/"
                      v      v
              +-------+--+  +-+---------------+
              |  Kibana  |  |  Elasticsearch  |   bound to loopback,
-             +----------+  +-----------------+   no external port
-                  every hop is HTTPS, verifying the internal CA
+             +----------+  +-----------------+   no externally reachable port
+                  every internal hop is HTTPS, verified against the internal CA
 ```
 
-## How each mandatory requirement is met
+Kibana is served at `/` and the Elasticsearch API at `/es/`. Elasticsearch and Kibana have no port that can be reached from outside — the only way in is through the TLS edge.
 
-| Requirement | Where |
-|-------------|-------|
-| Terraform provisions infrastructure | `local/terraform/` (Docker), `cloud/terraform/` (Hetzner) |
-| Ansible configures the services | `local/ansible/`, `cloud/ansible/` (roles: ca, elasticsearch, kibana, nginx) |
-| HTTPS everywhere | nginx edge + TLS on ES/Kibana + internal CA (`roles/ca`, `*.yml.j2`) |
-| Reproducible & automated | pinned versions, `make deploy`, generated inventory, idempotent playbooks |
-| One repository | this repo; `./run.sh` is the single entry point |
+### Terraform provisions the infrastructure
 
-## Design decisions
+Terraform owns everything that "exists." On the local target it creates a private Docker network on an uncommon subnet, named volumes, and the three service containers. On the cloud target it creates the Hetzner server, a private network and subnet, a default-deny firewall that allows only ports 22 and 443, an SSH key, and a Primary IP, and it uses cloud-init purely for unattended first boot. In both cases Terraform's final act is to write out the inventory that Ansible consumes. There are no configuration provisioners hidden inside Terraform — configuration is entirely Ansible's job, which keeps the two concerns from tangling.
 
-| Decision | Why |
-|----------|-----|
-| Terraform = infra only, Ansible = config only | Small, testable layers; the Ansible layer is portable to any host |
-| Internal CA (not Let's Encrypt) | No public domain; works offline and for a raw IP |
-| One exposed port | Smallest attack surface; backends are unreachable from outside |
-| Single node | Right-sized for the task; `yellow` health is expected (no replicas) |
-| cloud-init limited to first boot | Unattended bootstrap only; all real config is Ansible's job |
-| Pinned versions | Same code resolves the same way on every machine |
+### Ansible configures and provisions the services
 
-## Security
+Ansible takes the inventory and does all of the real setup through four focused roles. The `ca` role generates an internal certificate authority and issues TLS certificates for each service. The `elasticsearch`, `kibana`, and `nginx` roles install version-pinned software, render configuration from templates, wire in the certificates, enable security, and set generated passwords. The playbooks are idempotent by design, so re-running them is safe and makes no unnecessary changes.
 
-**Hardened:** authentication enforced (verify proves an anonymous request is rejected);
-HTTPS on the edge and every internal hop against the internal CA; exactly one open port;
-backends bound to loopback and proven unreachable; systemd/container hardening; no secrets
-in Git (generated passwords/keys live only under gitignored paths).
+### Elasticsearch and Kibana are securely accessible via HTTPS
 
-**Not production-grade:** self-signed internal CA (use ACME/an internal PKI with a real
-domain); single node with no snapshots/backups or audit logging; passwords printed once to
-the terminal (use a secrets manager); no WAF/rate limiting at the edge.
+Security is not an afterthought here; it is the default posture. TLS is present on the public edge **and** on every internal hop, each one validated against the internal CA. Authentication is enabled and enforced — the test suite proves this by confirming that an anonymous request is rejected and an authenticated one succeeds. Plain HTTP is refused rather than silently downgraded. Exactly one port is exposed, the backends are bound to loopback and are demonstrably unreachable from the host, and generated passwords and keys never enter version control — they live only under ignored paths and are printed once at the end of a deploy.
 
-## Cloud mapping
+### The whole process is automated, reproducible, and easy to replicate
 
-The Ansible layer is provider-agnostic (it targets an inventory); only Terraform changes.
+Reproducibility is built in rather than hoped for. Every version is pinned — Elasticsearch and Kibana 8.15.3, the Terraform providers, and the Ansible collections — so the same code resolves the same way on every machine. A single `make deploy` performs the entire pipeline end to end, the inventory that links Terraform to Ansible is generated automatically, and idempotency is not just claimed but asserted: a second Ansible run must report `changed=0`. The repository is deliberately structured so your team can replicate it with no friction. The `local/` and `cloud/` trees are each self-contained — either works if the other directory is deleted, and neither references the other — and `./run.sh` is the single, obvious entry point. Because the recommended path runs entirely on Docker, a reviewer can clone the repository and get a passing deployment without an account, an API token, or any special setup. Captured test evidence lives in `TESTING.md`.
 
-| This repo (Hetzner) | AWS | GCP | Azure |
-|---------------------|-----|-----|-------|
-| `hcloud_server` | EC2 | Compute Engine | VM |
-| `hcloud_network` / `_subnet` | VPC + subnet | VPC + subnetwork | VNet + subnet |
-| `hcloud_firewall` (22/443) | Security Group | Firewall rules | NSG |
-| `hcloud_ssh_key` | Key Pair | OS Login / metadata key | SSH public key |
-| cloud-init `user_data` | EC2 user data | startup-script | customData |
-| `local_file` inventory | `aws_ec2` dynamic inventory | `gcp_compute` inventory | `azure_rm` inventory |
+### Repository layout
 
-## Troubleshooting
+```
+.
+├── run.sh              # single interactive launcher (local or cloud)
+├── local/              # self-contained Local (Docker) target
+│   ├── terraform/      # network, volumes, containers  (what exists)
+│   ├── ansible/        # roles: ca, elasticsearch, kibana, nginx  (how it is set up)
+│   ├── scripts/        # preflight, deploy, verify, destroy, lint
+│   └── Makefile        # thin wrappers over the scripts
+├── cloud/              # self-contained Cloud (Hetzner) target — same shape
+├── README.md           # this file
+└── TESTING.md          # captured test output and honest coverage notes
+```
 
-| Symptom | Fix |
-|---------|-----|
-| Kibana shows "server is not ready" | ES/Kibana credential or TLS trust issue — re-run deploy; check `make logs`. Never mask with a longer wait. |
-| Local: ES restarts, `max_map_count` too low | `sudo sysctl -w vm.max_map_count=262144` |
-| Cloud: SSH hangs | passphrase key without a loaded agent — `ssh-add`, then re-run (preflight warns about this) |
-| Cloud: still billing | run `./run.sh` → Cloud → Destroy; it proves the project is empty |
-| Cluster health is `yellow` | expected on a single node (no replicas) |
+---
 
-## More
+## 3. Methodology & Implementation Journey
 
-- Local details: [local/README.md](local/README.md)
-- Cloud details: [cloud/README.md](cloud/README.md)
-- Test evidence: [TESTING.md](TESTING.md)
+### Architecture decision
+
+Before writing any code I weighed three environments against each other: **Azure**, **Hetzner**, and a fully **local** approach using Docker (with Vagrant as an alternative). Hetzner was a genuinely strong cloud candidate — cheap, fast, and clean to automate — and it remains in the repository as a working second target. In the end, though, I chose the local Docker approach as the primary path for one decisive reason: it guarantees that a reviewer can run and replicate the solution instantly on their own side, with a 100% success rate and no dependency on an active cloud subscription, API tokens, or account setup. The value of the challenge is in the automation and the design, and the local path lets that speak for itself without any external prerequisites getting in the way.
+
+### Proactive resilience and bug prevention
+
+My goal was a flawless "one-shot" deployment, so rather than fixing problems as they appeared, I worked backwards from them. Early on I brainstormed roughly twenty to twenty-five potential edge cases and deployment blockers across both the local and cloud scenarios — things like a missing kernel setting, a Python SDK installed against the wrong interpreter, a port already in use, a stale SSH host key on a reused cloud IP, clock skew that would break certificate validation, and more. Instead of leaving these to surface at runtime, I built defensive mechanisms into the architecture up front. The clearest example is a dedicated `preflight` script that strictly validates every prerequisite before any real execution begins, and prints the exact remediation for the operator's specific OS when something is wrong. That single design choice turns a class of confusing mid-deploy failures into a clear message you get in the first few seconds.
+
+### AI collaboration
+
+I used AI deliberately and with a division of labour. The initial heavy lifting and the architecture design were done with **Claude**, whose stronger reasoning suited the up-front structural decisions. For iterative testing and bug fixing I switched to **Cursor** running a faster, more cost-effective "Auto" model. This was a strategic choice rather than a compromise: smaller models are perfectly capable of catching syntax and runtime errors, so using them for the repetitive edit-test loop kept Claude's advanced reasoning in reserve for the genuinely complex fixes. Matching the tool to the difficulty of the task kept the work both fast and economical.
+
+### Testing
+
+The deployment was exercised three times autonomously by AI agents to shake out ordering, idempotency, and environment issues, and each pass was followed by thorough manual verification on my side. The local target was taken all the way through a clean deploy, a full functional and security check, an idempotency assertion, and teardown; the cloud target was run against a real Hetzner project, which surfaced and fixed several genuine environment-specific bugs. The full account, including captured output and an honest note on what was and was not observed end to end, is in `TESTING.md`.
+
+### Time and cost
+
+The financial cost of this project was exactly zero. It was fully covered by my existing monthly subscriptions to Claude and Cursor, with no additional spend. My own active, hands-on time — designing the architecture, reviewing code, and steering the agents — was about six hours, tracked with a timer. This documentation itself was produced with AI assistance but written strictly to my own documentation standards, so that the result reads clearly for a human reviewer rather than like machine-generated boilerplate.
+
+---
+
+## 4. Future Improvements
+
+The current solution is intentionally right-sized for the challenge. The following enhancements are the natural next steps toward a production-grade platform:
+
+1. **Multi-node clustering and high availability.** Move from a single node to a three-node Elasticsearch cluster with dedicated master and data roles and replica shards, so the stack survives the loss of any one node. The Ansible roles already target an inventory, so this is largely an inventory and settings change rather than a rewrite.
+
+2. **CI/CD pipeline integration.** Wire the existing lint, preflight, deploy, verify, and idempotency gates into a pipeline (for example GitHub Actions) that runs the full test suite on every push, so regressions are caught automatically and every change ships with proof that it still deploys cleanly.
+
+3. **External secrets management.** Replace the deploy-time generated passwords and keys — currently printed once and stored under ignored paths — with a proper secrets backend such as **HashiCorp Vault** or a cloud secrets manager, giving the deployment centralized rotation, auditing, and access control.
+
+4. **Publicly trusted certificates via ACME.** For any internet-facing deployment with a real domain, swap the internal CA for automatically issued and renewed certificates from **Let's Encrypt** (ACME), removing the browser warning while keeping HTTPS end to end.
+
+5. **Backups, monitoring, and observability.** Add an automated snapshot and restore workflow for Elasticsearch, enable audit logging, and ship metrics and logs to a monitoring stack with alerting, so the platform is not only secure but also recoverable and observable in day-to-day operation.
+
+---
+
+*Layout at a glance:* `local/` and `cloud/` each contain `terraform/` (infrastructure), `ansible/` (configuration), `scripts/`, and a thin `Makefile`. Start with `./run.sh`, or `cd local && make deploy`. See `TESTING.md` for how it was tested.
