@@ -1,6 +1,6 @@
 # Elasticsearch + Kibana over HTTPS — Automated with Terraform & Ansible
 
-A single-node **Elasticsearch + Kibana** stack that comes up behind an **nginx TLS edge** and is reachable **only over HTTPS**. **Terraform** builds the infrastructure and **Ansible** configures the services. The whole thing is one command to deploy and one command to tear down, and it runs on your own machine with no cloud account required.
+A single-node **Elasticsearch + Kibana** stack that comes up behind an **nginx TLS edge** and is reachable **only over HTTPS**. **Terraform** builds the infrastructure and **Ansible** configures the services. Deploy is one command (`./run.sh`) and teardown is one command (`./destroy.sh`) — two separate scripts, on purpose — and the whole thing runs on your own machine with no cloud account required.
 
 ---
 
@@ -16,7 +16,7 @@ From the repository root:
 ./run.sh
 ```
 
-`./run.sh` is an interactive launcher. It greets you, lets you pick **Local** (Docker on this machine — the default) or **Cloud** (a Hetzner VM), then runs everything for you: environment checks, deploy, credentials, and teardown. Press Enter to accept the defaults and you are done.
+`./run.sh` is an interactive launcher. It greets you, lets you pick **Local** (Docker on this machine — the default) or **Cloud** (a Hetzner VM), then runs everything for you: environment checks, deploy, and credentials. Press Enter to accept the defaults and you are done. Teardown is intentionally kept out of this script — see [Tear it down](#tear-it-down) below.
 
 ### The direct path (Local)
 
@@ -66,7 +66,32 @@ cd cloud
 make deploy
 ```
 
-Here the only public port is `443`, protected by a default-deny firewall. Preflight validates the token, confirms it has write permission, checks the project is empty, and prints the hourly rate **before** anything is created. Remember to run `make destroy` when you are done, as a live server keeps billing.
+Here the only public port is `443`, protected by a default-deny firewall. Preflight validates the token, confirms it has write permission, checks the project is empty, and prints the hourly rate **before** anything is created. Remember to tear it down when you are done, as a live server keeps billing.
+
+### Tear it down
+
+Teardown is a separate, deliberate action — it is **not** hidden inside `./run.sh`, so a running stack is never removed by accident. Use the dedicated launcher:
+
+```bash
+./destroy.sh
+```
+
+`./destroy.sh` mirrors `./run.sh`: it shows what is currently deployed, lets you pick **Local** or **Cloud**, confirms, and then tears that target down. For the local target it removes the containers, network, and volumes; for the cloud target it deletes the Hetzner server **and** its Primary IP (billed separately), then prints a full project listing so you can see nothing is left billing. It can also run non-interactively:
+
+```bash
+./destroy.sh --target local  --yes             # remove the local stack
+./destroy.sh --target cloud  --yes             # remove the Hetzner server and prove the project is empty
+./destroy.sh --target local  --purge --yes     # also wipe generated certs/secrets/state (a true cold start)
+```
+
+The manual path per target works exactly the same way:
+
+```bash
+cd local && make destroy     # remove the containers, network, and volumes
+cd local && make reset       # destroy AND purge generated certs/secrets/inventory
+```
+
+The same `make destroy` and `make reset` targets exist under `cloud/`.
 
 ---
 
@@ -114,7 +139,8 @@ Reproducibility is built in rather than hoped for. Every version is pinned — E
 
 ```
 .
-├── run.sh              # single interactive launcher (local or cloud)
+├── run.sh              # deploy launcher — interactive or non-interactive (local or cloud)
+├── destroy.sh          # teardown launcher — separate from run.sh, on purpose
 ├── local/              # self-contained Local (Docker) target
 │   ├── terraform/      # network, volumes, containers  (what exists)
 │   ├── ansible/        # roles: ca, elasticsearch, kibana, nginx  (how it is set up)
@@ -167,4 +193,4 @@ The current solution is intentionally right-sized for the challenge. The followi
 
 ---
 
-*Layout at a glance:* `local/` and `cloud/` each contain `terraform/` (infrastructure), `ansible/` (configuration), `scripts/`, and a thin `Makefile`. Start with `./run.sh`, or `cd local && make deploy`. See `TESTING.md` for how it was tested.
+*Layout at a glance:* `local/` and `cloud/` each contain `terraform/` (infrastructure), `ansible/` (configuration), `scripts/`, and a thin `Makefile`. To deploy, start with `./run.sh` (or `cd local && make deploy`); to tear down, use `./destroy.sh` (or `cd local && make destroy`). See `TESTING.md` for how it was tested.

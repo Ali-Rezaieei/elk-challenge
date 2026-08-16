@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # ===========================================================================
-# run.sh - the single interactive entry point for this repository.
+# run.sh - the single interactive entry point for DEPLOYING this repository.
 #
 # It ORCHESTRATES only: every real step lives in local/ or cloud/, and each is
 # treated as a black box (its own Makefile + scripts). The experience is
 # identical for both targets: welcome -> choose -> confirm -> preflight ->
 # deploy (streamed) -> result -> menu.
+#
+# Teardown is deliberately NOT here. Destroying a deployment is a separate,
+# explicit action: use ./destroy.sh (so a stack is never torn down by hitting
+# the wrong menu item mid-session).
 #
 # Compatible with bash 3.2 (macOS) and Linux: no associative arrays, no
 # readarray. set -euo pipefail throughout; colour only on a TTY.
@@ -39,9 +43,9 @@ on_interrupt() {
   printf '\n'
   warn "Interrupted."
   if [ "$CURRENT_TARGET" = "cloud" ] && [ "$CLOUD_OP_ACTIVE" = "1" ]; then
-    warn "A cloud operation was in progress. The cloud deploy auto-destroys on abort,"
-    warn "but confirm nothing is still billing:"
-    printf '    ./run.sh   ->  2) Cloud  ->  Destroy\n' >&2
+    warn "A cloud deploy was in progress. It auto-cleans on abort, but confirm nothing"
+    warn "is still billing by running the teardown launcher:"
+    printf '    ./destroy.sh   ->  Cloud\n' >&2
   fi
   exit 130
 }
@@ -54,18 +58,20 @@ Usage: ./run.sh [options]
 Interactive (no options): guides you through deploying locally or to the cloud.
 
 Non-interactive:
-  ./run.sh --target <local|cloud> --action <deploy|verify|destroy> [--yes]
+  ./run.sh --target <local|cloud> --action <deploy|verify> [--yes]
 
 Options:
   --target   local | cloud
-  --action   deploy | verify | destroy
+  --action   deploy | verify
   --yes      assume yes / skip confirmations (required for non-interactive cloud spend)
   --help     show this help
 
 Examples:
   ./run.sh
   ./run.sh --target local  --action deploy --yes
-  ./run.sh --target cloud  --action destroy
+  ./run.sh --target cloud  --action verify
+
+To tear a deployment down, use ./destroy.sh.
 EOF
 }
 
@@ -122,7 +128,7 @@ show_credentials() { # target
   printf '  URL:      %s\n' "${url:-unknown}"
   printf '  Username: elastic\n'
   printf '  Password: %s\n' "${pw:-<not found - is it deployed?>}"
-  [ "$1" = "cloud" ] && printf '  %sThis server bills until you destroy it.%s\n' "$C_BOLD" "$C_RESET"
+  [ "$1" = "cloud" ] && printf '  %sThis server bills until you destroy it (./destroy.sh).%s\n' "$C_BOLD" "$C_RESET"
   hr
 }
 
@@ -215,7 +221,7 @@ confirm_cost() {
 ${C_BOLD}About to create a real Hetzner server (cx33, 8 GB).${C_RESET}
   - Cost is roughly EUR 0.02-0.03 per hour, including a Primary IPv4.
   - A deploy + short test + destroy cycle costs only a few cents.
-  - It will keep billing until you run Destroy.
+  - It will keep billing until you tear it down with ./destroy.sh.
 EOF
   if [ "$ASSUME_YES" = "1" ]; then ok "Proceeding (--yes)."; return 0; fi
   printf '%sType "yes" to create it and start spending: %s' "$C_BOLD" "$C_RESET" >&2
@@ -228,20 +234,6 @@ confirm_generic() { # confirm_generic "message"  -> 0 to proceed
   printf '%s%s [Y/n]: %s' "$C_BOLD" "$1" "$C_RESET" >&2
   local s; IFS= read -r s || true
   case "$(lower "${s:-}")" in n|no) return 1 ;; *) return 0 ;; esac
-}
-
-confirm_destroy_on_exit() { # target -> 0 if the user wants to tear down now
-  # Default is NO so nobody destroys a stack by accidentally hitting Enter, but
-  # we always ASK - especially for cloud, which keeps billing if left up.
-  local t="$1" prompt
-  if [ "$t" = "cloud" ]; then
-    prompt="Destroy the cloud server now so it stops billing?"
-  else
-    prompt="Destroy the local deployment now to free resources?"
-  fi
-  printf '%s%s [y/N]: %s' "$C_BOLD" "$prompt" "$C_RESET" >&2
-  local s; IFS= read -r s || true
-  case "$(lower "${s:-}")" in y|yes) return 0 ;; *) return 1 ;; esac
 }
 
 result_block() { # target
@@ -259,11 +251,12 @@ result_block() { # target
     printf '\n  Public IP: %s\n' "${ip:-unknown}"
     printf '  %sThis server costs money until you tear it down.%s\n' "$C_BOLD" "$C_RESET"
   fi
-  printf '  To tear down:  ./run.sh  ->  Destroy\n'
+  printf '  To tear down:  ./destroy.sh\n'
   hr
 }
 
 # --- Post-deploy / existing-deployment menu --------------------------------
+# Read-only actions only. Teardown lives in ./destroy.sh, on purpose.
 post_menu() { # target
   local t="$1"
   while :; do
@@ -274,7 +267,6 @@ post_menu() { # target
     2) Re-run verification
     3) Show credentials
     4) Show logs
-    5) Destroy
     q) Leave running and exit
 EOF
     printf 'Choice [q]: ' >&2
@@ -284,50 +276,15 @@ EOF
       2) run_make "$t" verify || warn "Verification reported problems (see above)." ;;
       3) show_credentials "$t" ;;
       4) run_make "$t" logs || warn "Could not fetch logs." ;;
-      5)
-        if confirm_generic "Destroy the ${t} deployment now?"; then
-          CLOUD_OP_ACTIVE=1; run_make "$t" destroy; CLOUD_OP_ACTIVE=0
-          ok "Destroyed."; return 0
-        fi ;;
       q|Q)
-        # Before leaving, actively offer teardown so nothing is left behind.
-        if confirm_destroy_on_exit "$t"; then
-          CLOUD_OP_ACTIVE=1; run_make "$t" destroy; CLOUD_OP_ACTIVE=0
-          ok "Destroyed."; return 0
-        fi
         if [ "$t" = "cloud" ] && cloud_exists; then
           warn "The cloud server is STILL RUNNING and still billing."
-          warn "Tear it down with:  ./run.sh  ->  2) Cloud  ->  Destroy"
+          warn "Tear it down with:  ./destroy.sh  ->  Cloud"
+        else
+          info "Left running. Tear it down anytime with ./destroy.sh."
         fi
         return 0 ;;
-      *) warn "Please choose 1-5 or q." ;;
-    esac
-  done
-}
-
-existing_menu() { # target - offered when a deployment already exists
-  local t="$1"
-  warn "An existing ${t} deployment was detected."
-  while :; do
-    cat >&2 <<EOF
-
-  ${C_BOLD}It looks like ${t} is already deployed. What do you want to do?${C_RESET}
-    1) Verify it
-    2) Destroy it
-    3) Redeploy (destroy, then deploy again)
-    q) Quit
-EOF
-    printf 'Choice [1]: ' >&2
-    local c; IFS= read -r c || true; c="${c:-1}"
-    case "$c" in
-      1) run_make "$t" verify || warn "Verification reported problems."; post_menu "$t"; return 0 ;;
-      2) CLOUD_OP_ACTIVE=1; run_make "$t" destroy; CLOUD_OP_ACTIVE=0; ok "Destroyed."; return 0 ;;
-      3)
-        CLOUD_OP_ACTIVE=1; run_make "$t" destroy; CLOUD_OP_ACTIVE=0
-        if [ "$t" = "cloud" ]; then ensure_ssh_key || return 1; confirm_cost || return 0; fi
-        deploy_target "$t"; return 0 ;;
-      q|Q) return 0 ;;
-      *) warn "Please choose 1-3 or q." ;;
+      *) warn "Please choose 1-4 or q." ;;
     esac
   done
 }
@@ -344,7 +301,7 @@ deploy_target() { # target - run the deploy and show the result + menu
     [ "$t" = "cloud" ] && CLOUD_OP_ACTIVE=0
     err "Deploy did not complete. The output above explains what failed and how to fix it."
     if [ "$t" = "cloud" ]; then
-      err "The cloud deploy auto-cleans on failure; confirm no server remains: ./run.sh -> Cloud -> Destroy"
+      err "The cloud deploy auto-cleans on failure; confirm no server remains: ./destroy.sh -> Cloud"
     fi
     return 1
   fi
@@ -352,7 +309,12 @@ deploy_target() { # target - run the deploy and show the result + menu
 
 interactive_local() {
   CURRENT_TARGET="local"
-  if local_exists; then existing_menu local; return 0; fi
+  if local_exists; then
+    warn "An existing local deployment was detected."
+    info "To tear it down (or before redeploying), run ./destroy.sh first."
+    post_menu local
+    return 0
+  fi
   confirm_generic "Build the stack locally with Docker (~3-6 min on first run). Continue?" || { info "Cancelled."; return 0; }
   deploy_target local
 }
@@ -360,7 +322,12 @@ interactive_local() {
 interactive_cloud() {
   CURRENT_TARGET="cloud"
   ensure_token
-  if cloud_exists; then existing_menu cloud; return 0; fi
+  if cloud_exists; then
+    warn "An existing cloud deployment was detected."
+    info "To tear it down (or before redeploying), run ./destroy.sh first."
+    post_menu cloud
+    return 0
+  fi
   ensure_ssh_key || return 1
   confirm_cost || return 0
   deploy_target cloud
@@ -374,6 +341,8 @@ welcome() {
 This deploys a single-node Elasticsearch + Kibana stack behind an nginx TLS edge.
 Terraform builds the infrastructure; Ansible configures the services.
 Everything is reachable only over HTTPS.
+
+When you are done, tear it down with ./destroy.sh.
 EOF
 }
 
@@ -412,7 +381,11 @@ done
 if [ -n "$TARGET" ] || [ -n "$ACTION" ]; then
   if [ -z "$TARGET" ] || [ -z "$ACTION" ]; then err "Both --target and --action are required for non-interactive mode."; usage; exit 2; fi
   case "$TARGET" in local|cloud) : ;; *) err "--target must be local or cloud"; exit 2 ;; esac
-  case "$ACTION" in deploy|verify|destroy) : ;; *) err "--action must be deploy, verify, or destroy"; exit 2 ;; esac
+  case "$ACTION" in
+    deploy|verify) : ;;
+    destroy) err "Teardown moved out of run.sh. Use: ./destroy.sh --target ${TARGET} [--purge] [--yes]"; exit 2 ;;
+    *) err "--action must be deploy or verify"; exit 2 ;;
+  esac
   check_not_root
   CURRENT_TARGET="$TARGET"
   if [ "$TARGET" = "cloud" ]; then
