@@ -49,8 +49,17 @@
     owner: root
     group: root
     mode: "0644"
-    validate: "nginx -t -c /etc/nginx/nginx.conf"
   notify: Reload nginx
+
+# The vhost is an *include* (a server block dropped into conf.d/), so it cannot
+# be validated on its own - Ansible's `validate:` runs against a temporary copy
+# of just this file, which is not a complete nginx.conf. Instead, render it and
+# then run a full `nginx -t` against the whole configuration. This still catches
+# a broken vhost before the Reload handler ever touches the live service, and it
+# is idempotent (changed_when: false).
+- name: Validate the full nginx configuration
+  ansible.builtin.command: nginx -t
+  changed_when: false
 
 # --- systemd hardening (unit override) -------------------------------------
 - name: Create the systemd override directory for nginx
