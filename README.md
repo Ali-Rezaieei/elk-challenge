@@ -68,17 +68,24 @@ exact fix for your OS on any failure. It runs automatically inside `make deploy`
 
 ## 4. Quick start
 
-From a fresh clone, with Docker running:
+Make sure Docker is running, then run these in order from the project folder.
+
+**Step 1 — Install the dependencies (only the first time):**
 
 ```bash
-ansible-galaxy collection install -r ansible/requirements.yml   # one-off
-make deploy                                                     # build + configure + verify
+ansible-galaxy collection install -r ansible/requirements.yml
 ```
 
-- **First run:** ~3–6 minutes (mostly the image pull and Elasticsearch's first boot).
-- **Later runs:** ~60–90 seconds.
+**Step 2 — Bring the stack up:**
 
-`make deploy` ends with a check table and your login details:
+```bash
+make deploy
+```
+
+This one command does everything: it checks your machine, builds the
+infrastructure with Terraform, configures the services with Ansible, and runs the
+tests. First run takes ~3–6 minutes (image download + first boot); later runs
+~60–90 seconds. When it finishes you will see:
 
 ```
 == Verify ==
@@ -97,15 +104,26 @@ make deploy                                                     # build + config
   Password: <generated at deploy time>
 ```
 
-Other commands:
+**Step 3 — Open it:** go to <https://localhost:8443/> and log in as `elastic` with
+the password shown above (a browser certificate warning is expected — see
+[section 5](#5-first-time-you-open-it)).
+
+**Step 4 — Bring the stack down when you are done:**
+
+```bash
+make destroy   # remove the containers, network, and volumes
+# or, for a completely clean slate (also deletes generated certs/secrets):
+make reset
+```
+
+**Other commands (optional):**
 
 | Command | What it does |
 |---------|--------------|
-| `make verify` | Re-run the functional + security checks. |
+| `make verify` | Re-run the functional + security checks on a running stack. |
 | `make idempotency` | Run Ansible twice; the second run must report `changed=0`. |
 | `make lint` | `terraform fmt`/`validate`, `ansible-lint`, `shellcheck`, `yamllint`. |
-| `make destroy` | Remove containers, network, and volumes. |
-| `make reset` | `destroy` + delete generated certs/secrets for a true cold start. |
+| `make preflight` | Just check the environment, without deploying. |
 
 ---
 
