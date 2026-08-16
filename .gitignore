@@ -1,38 +1,39 @@
 # ---------------------------------------------------------------------------
 # Secret hygiene: nothing generated at deploy time may ever enter version
-# control. The reviewer will grep the tree for the generated password; it must
-# only ever exist under one of the paths below.
+# control. Patterns are **/-prefixed so they apply inside both local/ and
+# cloud/ (each is a self-contained project with its own terraform/ + ansible/).
 # ---------------------------------------------------------------------------
 
-# Terraform state can contain resource attributes and is environment-specific.
-terraform/.terraform/
-# The provider lock file is per-OS (it records platform-specific hashes). Since
-# reviewers run on Linux/macOS/Windows, we let each machine resolve it against
-# the pinned "~> 3.0" constraint in versions.tf rather than shipping a lock that
-# only matches one platform. Regenerate cross-platform with:
-#   terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 ...
-terraform/.terraform.lock.hcl
-*.tfstate
-*.tfstate.*
+# Terraform working dirs, lock files (per-OS), and state (environment-specific).
+**/.terraform/
+**/.terraform.lock.hcl
+**/*.tfstate
+**/*.tfstate.*
 crash.log
 crash.*.log
 
 # Real variable files (only the *.example is committed).
-terraform/terraform.tfvars
-*.auto.tfvars
+**/terraform.tfvars
+**/*.auto.tfvars
 
 # Terraform -> Ansible handover artefact, written from TF state at apply time.
-ansible/inventory/hosts.yml
+**/ansible/inventory/hosts.yml
 
 # Deploy-time secrets: generated passwords live here and nowhere else.
-ansible/.secrets/
+**/.secrets/
 
 # Deploy-time PKI: the internal CA and all leaf certificates/keys.
-ansible/.certs/
+**/.certs/
 
-# Ansible bookkeeping.
-ansible/*.retry
-ansible/collections/
+# Vendored Ansible collections and bookkeeping.
+**/ansible/collections/
+**/*.retry
+
+# Cloud: SSH known_hosts captured at deploy time, the API token, and any
+# diagnostics captured on a failed run.
+**/.ssh_known_hosts
+cloud/.env
+cloud/diagnostics/
 
 # OS / editor noise.
 .DS_Store
