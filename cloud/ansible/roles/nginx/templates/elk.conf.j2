@@ -2,9 +2,10 @@
 # TLS termination + reverse proxy. The single public entry point (443).
 
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
+    # HTTP/2 is enabled on the listen line: Ubuntu 24.04 ships nginx 1.24, where
+    # the standalone `http2 on;` directive (nginx >= 1.25.1) does not exist yet.
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name {{ public_ipv4 }};
 
     ssl_certificate     {{ nginx_certs_dir }}/nginx.crt;
