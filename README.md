@@ -22,51 +22,7 @@ boundary is what makes the same design portable to any cloud (see [section 8](#8
 
 ---
 
-## 2. Architecture
-
-```
-                        host machine
-                             |
-                   127.0.0.1:8443  (HTTPS — the only open port)
-                             |
-                    +--------v---------+
-                    |      nginx       |  TLS termination + reverse proxy
-                    | non-root, caps   |  read-only rootfs
-                    |   dropped        |
-                    +----+--------+----+
-                "/"      |        |   "/es/"
-                         v        v
-              +----------+--+  +--+-----------------+
-              |   Kibana    |  |  Elasticsearch     |
-              |  (TLS, no   |  |  (TLS, no open     |
-              |  open port) |  |   port)            |
-              +-------------+  +--------------------+
-                    private docker network only
-                 (every hop verifies the internal CA)
-```
-
-Every arrow is HTTPS.
-
----
-
-## 3. Prerequisites
-
-| Tool | Minimum | Note |
-|------|---------|------|
-| Docker Engine / Desktop | 20.10 | Running, and usable without `sudo`. |
-| Terraform | 1.5 | OpenTofu also works. |
-| Ansible (`ansible-core`) | 2.15 | e.g. `pipx install ansible-core`. |
-| Python 3 + `docker` SDK | 3.9 | The SDK must be importable by the Python that Ansible uses. |
-| `make`, `curl`, `openssl` | any | `jq` is optional. |
-| RAM for Docker | ~3 GB | On macOS/Windows this is the Docker Desktop VM, not host RAM. |
-| `vm.max_map_count` | 262144 | Kernel setting Elasticsearch needs (see [section 9](#9-troubleshooting)). |
-
-You do not need to check these by hand. `make preflight` runs 23 checks and prints the
-exact fix for your OS on any failure. It runs automatically inside `make deploy`.
-
----
-
-## 4. Quick start
+## 2. Quick start
 
 Make sure Docker is running, then run these in order from the project folder.
 
@@ -124,6 +80,50 @@ make reset
 | `make idempotency` | Run Ansible twice; the second run must report `changed=0`. |
 | `make lint` | `terraform fmt`/`validate`, `ansible-lint`, `shellcheck`, `yamllint`. |
 | `make preflight` | Just check the environment, without deploying. |
+
+---
+
+## 3. Architecture
+
+```
+                        host machine
+                             |
+                   127.0.0.1:8443  (HTTPS — the only open port)
+                             |
+                    +--------v---------+
+                    |      nginx       |  TLS termination + reverse proxy
+                    | non-root, caps   |  read-only rootfs
+                    |   dropped        |
+                    +----+--------+----+
+                "/"      |        |   "/es/"
+                         v        v
+              +----------+--+  +--+-----------------+
+              |   Kibana    |  |  Elasticsearch     |
+              |  (TLS, no   |  |  (TLS, no open     |
+              |  open port) |  |   port)            |
+              +-------------+  +--------------------+
+                    private docker network only
+                 (every hop verifies the internal CA)
+```
+
+Every arrow is HTTPS.
+
+---
+
+## 4. Prerequisites
+
+| Tool | Minimum | Note |
+|------|---------|------|
+| Docker Engine / Desktop | 20.10 | Running, and usable without `sudo`. |
+| Terraform | 1.5 | OpenTofu also works. |
+| Ansible (`ansible-core`) | 2.15 | e.g. `pipx install ansible-core`. |
+| Python 3 + `docker` SDK | 3.9 | The SDK must be importable by the Python that Ansible uses. |
+| `make`, `curl`, `openssl` | any | `jq` is optional. |
+| RAM for Docker | ~3 GB | On macOS/Windows this is the Docker Desktop VM, not host RAM. |
+| `vm.max_map_count` | 262144 | Kernel setting Elasticsearch needs (see [section 9](#9-troubleshooting)). |
+
+You do not need to check these by hand. `make preflight` runs 23 checks and prints the
+exact fix for your OS on any failure. It runs automatically inside `make deploy`.
 
 ---
 
