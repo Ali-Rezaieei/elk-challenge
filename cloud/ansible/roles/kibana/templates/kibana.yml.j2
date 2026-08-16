@@ -9,6 +9,12 @@ server.name: "kibana"
 # The address Kibana advertises in generated links (the nginx edge on 443).
 server.publicBaseUrl: "{{ kibana_public_base_url }}"
 
+# Working data directory (Kibana's uuid + caches). This file replaces the
+# packaged kibana.yml, so set it explicitly to the package-owned dir; otherwise
+# Kibana can fall back to a path under /usr/share/kibana the kibana user cannot
+# write. Mirrors the ES path.data/path.logs fix.
+path.data: /var/lib/kibana
+
 # --- Kibana serves TLS, so the nginx -> Kibana hop is encrypted -------------
 server.ssl.enabled: true
 server.ssl.certificate: "{{ kb_certs_dir }}/kibana.crt"

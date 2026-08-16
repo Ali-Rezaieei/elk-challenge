@@ -76,7 +76,7 @@ Teardown is a separate, deliberate action — it is **not** hidden inside `./run
 ./destroy.sh
 ```
 
-`./destroy.sh` mirrors `./run.sh`: it shows what is currently deployed, lets you pick **Local** or **Cloud**, confirms, and then tears that target down. For the local target it removes the containers, network, and volumes; for the cloud target it deletes the Hetzner server **and** its Primary IP (billed separately), then prints a full project listing so you can see nothing is left billing. It can also run non-interactively:
+`./destroy.sh` mirrors `./run.sh`: it shows what is currently deployed, lets you pick **Local** or **Cloud**, confirms, and then tears that target down. For the local target it removes the containers, network, and volumes; for the cloud target it deletes the Hetzner server **and** its Primary IP (billed separately), then prints a project-scoped listing (everything Terraform labelled `project==elk-cloud`) so you can see this deployment is fully gone — anything you keep in the account yourself is left untouched. It can also run non-interactively:
 
 ```bash
 ./destroy.sh --target local  --yes             # remove the local stack

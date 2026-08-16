@@ -4,6 +4,14 @@
 cluster.name: "{{ es_cluster_name }}"
 node.name: "{{ es_node_name }}"
 
+# Data and log directories. This file REPLACES the packaged elasticsearch.yml,
+# so the deb's own path.data/path.logs defaults are gone. Without them, ES falls
+# back to $ES_HOME/{data,logs} under /usr/share/elasticsearch, which the
+# 'elasticsearch' service user cannot create - it then dies during logging init,
+# before it can write a single log line. Point both at the package-owned dirs.
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+
 # Bind the REST/HTTP listener to loopback only. nginx (same host) is the sole
 # public entry point; 9200 is never exposed and never in the firewall.
 network.host: {{ elasticsearch_bind_host }}

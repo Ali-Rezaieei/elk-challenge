@@ -144,12 +144,59 @@
     mode: "0660"
 
 # --- Start + apply any pending config changes before the readiness gate -----
+# Elasticsearch can fail to start for reasons it only reports to journald or its
+# own log (a bad setting, a TLS/key problem, a JVM/bootstrap error). If the start
+# fails, capture those sources and print them INLINE so the cause is visible in
+# the deploy output itself - never hidden behind a destroyed server or a log file
+# nobody thinks to open.
 - name: Enable and start Elasticsearch
-  ansible.builtin.systemd:
-    name: elasticsearch
-    enabled: true
-    state: started
-    daemon_reload: true
+  block:
+    - name: Enable and start Elasticsearch
+      ansible.builtin.systemd:
+        name: elasticsearch
+        enabled: true
+        state: started
+        daemon_reload: true
+  rescue:
+    - name: Collect the systemd unit status for elasticsearch
+      ansible.builtin.command: systemctl --no-pager --full status elasticsearch
+      register: es_start_status
+      changed_when: false
+      failed_when: false
+
+    - name: Collect the last elasticsearch journal entries
+      ansible.builtin.command: journalctl -xeu elasticsearch --no-pager --lines 150
+      register: es_start_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Collect the elasticsearch application log (if one was written)
+      ansible.builtin.shell: >-
+        tail -n 150 /var/log/elasticsearch/*.log 2>/dev/null
+        || echo '(no /var/log/elasticsearch/*.log present - ES exited before it could open its log)'
+      register: es_start_applog
+      changed_when: false
+      failed_when: false
+
+    - name: Show exactly why Elasticsearch failed to start
+      ansible.builtin.debug:
+        msg: |-
+          ==================== Elasticsearch failed to start ====================
+          ----- systemctl status elasticsearch -----
+          {{ es_start_status.stdout | default('') }}
+          {{ es_start_status.stderr | default('') }}
+          ----- journalctl -xeu elasticsearch (last 150 lines) -----
+          {{ es_start_journal.stdout | default('') }}
+          ----- /var/log/elasticsearch/*.log (last 150 lines) -----
+          {{ es_start_applog.stdout | default('') }}
+          =======================================================================
+
+    - name: Fail with the captured Elasticsearch startup error
+      ansible.builtin.fail:
+        msg: >-
+          Elasticsearch did not start. Its systemd status, journal and
+          application log are printed directly above this line - the root cause
+          is in there. Fix that, then re-run the deploy.
 
 - name: Apply any pending restart now (so health reflects the current config)
   ansible.builtin.meta: flush_handlers

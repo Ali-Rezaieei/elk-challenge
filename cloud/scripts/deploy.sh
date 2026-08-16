@@ -29,8 +29,17 @@ cleanup() {
   local rc=$?
   trap - EXIT INT TERM ERR
   if [ "$SUCCESS" != "1" ] && [ "$PROVISIONED" = "1" ]; then
-    log_warn "Deploy did not complete cleanly; collecting diagnostics then destroying to avoid a server that keeps billing..."
-    "${SCRIPT_DIR}/destroy.sh" --diagnostics || log_err "Automatic cleanup FAILED - open console.hetzner.cloud and delete the server + its Primary IP by hand."
+    if [ "${KEEP_ON_FAILURE:-0}" = "1" ]; then
+      # Debug mode: leave the server up so its live state can be inspected.
+      local ip; ip="$( (cd "$TF_DIR" && terraform output -raw server_ipv4 2>/dev/null) || echo '<server-ip>')"
+      log_warn "Deploy failed and KEEP_ON_FAILURE=1 is set - LEAVING the server running for inspection."
+      log_warn "  Inspect logs:  cd cloud && make logs        (or: ssh deploy@${ip})"
+      log_warn "  IT IS BILLING. Tear it down when done:  cd cloud && make destroy"
+    else
+      log_warn "Deploy did not complete cleanly; collecting diagnostics then destroying to avoid a server that keeps billing..."
+      log_info "  Tip: set KEEP_ON_FAILURE=1 before deploy to keep the server up for debugging instead."
+      "${SCRIPT_DIR}/destroy.sh" --diagnostics || log_err "Automatic cleanup FAILED - open console.hetzner.cloud and delete the server + its Primary IP by hand."
+    fi
   fi
   exit "$rc"
 }

@@ -86,9 +86,16 @@ if [ -n "${HCLOUD_TOKEN:-}" ]; then
   done
 fi
 
-# --- Proof: list the WHOLE project. Everything must read 0. ----------------
+# --- Proof: list THIS deployment's resources (label project==<prefix>). -----
+# Scoped to our project label on purpose. Everything this stack creates - the
+# server, Primary IP, network, firewall AND the SSH key - is labelled
+# project==<prefix> by Terraform, so this proves *our* footprint is gone.
+# Resources you own outside this deployment (e.g. an SSH key you added to the
+# project by hand) are deliberately NOT counted or deleted - they are not ours
+# to touch, and they used to trigger a false "NOT empty".
 if [ -n "${HCLOUD_TOKEN:-}" ]; then
-  section "Final project listing (must be empty)"
+  section "Final project-scoped listing (everything labelled project==${PREFIX} must be 0)"
+  SEL="label_selector=project==${PREFIX}"
   TOTAL=0
   for pair in \
     "servers:servers" "primary_ips:primary_ips" "floating_ips:floating_ips" \
@@ -96,16 +103,21 @@ if [ -n "${HCLOUD_TOKEN:-}" ]; then
     "certificates:certificates" "load_balancers:load_balancers" \
     "networks:networks" "firewalls:firewalls" "ssh_keys:ssh_keys"; do
     ep="${pair%%:*}"; key="${pair##*:}"
-    n="$(hc_count "/${ep}" "$key")"; [ "$n" = "-1" ] && n="?"
+    # Append the label selector, respecting endpoints that already have a query.
+    case "$ep" in
+      *\?*) url="/${ep}&${SEL}" ;;
+      *)    url="/${ep}?${SEL}" ;;
+    esac
+    n="$(hc_count "$url" "$key")"; [ "$n" = "-1" ] && n="?"
     printf '  %-24s %s\n' "${ep}:" "$n"
     case "$n" in ''|0|\?) : ;; *) TOTAL=$((TOTAL + n)) ;; esac
-    names="$(hc_names "/${ep}" "$key")"
+    names="$(hc_names "$url" "$key")"
     [ -n "$names" ] && printf '%s\n' "$names" | sed 's/^/      - /'
   done
   if [ "$TOTAL" -eq 0 ]; then
-    log_ok "Hetzner project is EMPTY. No server, Primary IP, network, firewall or SSH key remains."
+    log_ok "This deployment is fully gone: 0 resources labelled project==${PREFIX} (server, Primary IP, network, firewall and SSH key all removed). Nothing from this stack remains or bills."
   else
-    log_warn "Project is NOT empty (${TOTAL} billable/reserved object(s) above). Investigate in the console."
+    log_warn "Still ${TOTAL} resource(s) labelled project==${PREFIX} (above). Investigate in the console."
   fi
 fi
 
