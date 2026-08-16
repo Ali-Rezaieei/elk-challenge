@@ -110,13 +110,23 @@ check "Edge certificate is unexpired and its SAN/CN covers 'localhost'" t_cert_v
 # 9. Kibana serves a real login page (HTTP 200, real HTML) - not 502 and not
 #    "Kibana server is not ready yet".
 t_kibana_login_html() {
-  local out code body
-  out="$(cca -s -L -w '\n%{http_code}' "${BASE}/login" 2>/dev/null || echo)"
-  code="$(printf '%s' "$out" | tail -n1)"
-  body="$(printf '%s' "$out" | sed '$d')"
-  [ "$code" = "200" ] || return 1
-  printf '%s' "$body" | grep -qi 'not ready' && return 1
-  printf '%s' "$body" | grep -qiE 'kbn|elastic|loginForm|core\.entry'
+  # Kibana's HTTP routes can lag the status API by a second or two, so poll
+  # (bounded) instead of a single shot. This waits for real readiness; it does
+  # not mask a broken Kibana (a genuinely broken one never stops saying so).
+  local out code body i=0
+  while [ "$i" -lt 10 ]; do
+    out="$(cca -s -L -w '\n%{http_code}' "${BASE}/login" 2>/dev/null || echo)"
+    code="${out##*$'\n'}"
+    body="${out%$'\n'*}"
+    # Grep a here-string (not a pipe): grep -q exits on first match and would
+    # SIGPIPE an upstream producer, which pipefail then reports as a failure.
+    if [ "$code" = "200" ] && ! grep -qi 'not ready' <<<"$body" \
+       && grep -qiE 'kbn|elastic|loginForm' <<<"$body"; then
+      return 0
+    fi
+    i=$((i + 1)); sleep 2
+  done
+  return 1
 }
 check "Kibana serves a real login page (HTTP 200, not 'server not ready')" t_kibana_login_html
 
@@ -130,7 +140,7 @@ t_roundtrip() {
       -H 'Content-Type: application/json' -d '{"msg":"hello-roundtrip"}' 2>/dev/null || return 1
   doc="$(cca -s -u "elastic:${ELASTIC_PW}" "${BASE}/es/${idx}/_search?q=msg:hello-roundtrip" 2>/dev/null || true)"
   cca -s -o /dev/null -u "elastic:${ELASTIC_PW}" -X DELETE "${BASE}/es/${idx}" 2>/dev/null || true
-  printf '%s' "$doc" | grep -q 'hello-roundtrip'
+  grep -q 'hello-roundtrip' <<<"$doc"
 }
 check "Full data round trip (create index, write, search, read back, delete)" t_roundtrip
 

@@ -55,27 +55,41 @@ t_http_refused() {
 check "Plain HTTP is refused (no cleartext content served)" t_http_refused
 
 # 3. Elasticsearch cluster health via the proxy is green or yellow.
+# Note: grep a captured variable via here-string, never `curl | grep -q`: grep
+# exits on first match, SIGPIPEs curl, and pipefail would report that as failure.
 t_es_health() {
-  cca -s -u "elastic:${ELASTIC_PW}" "${BASE}/es/_cluster/health" 2>/dev/null | grep -qE '"status":"(green|yellow)"'
+  local body
+  body="$(cca -s -u "elastic:${ELASTIC_PW}" "${BASE}/es/_cluster/health" 2>/dev/null || true)"
+  grep -qE '"status":"(green|yellow)"' <<<"$body"
 }
 check "Elasticsearch cluster health is green/yellow (via /es/)" t_es_health
 
 # 4. Kibana status API reports 'available' (not 'degraded').
 t_kibana_available() {
-  cca -s "${BASE}/api/status" 2>/dev/null | grep -q '"level":"available"'
+  local body
+  body="$(cca -s "${BASE}/api/status" 2>/dev/null || true)"
+  grep -q '"level":"available"' <<<"$body"
 }
 check "Kibana status API reports 'available'" t_kibana_available
 
 # 5. Kibana returns a real login page (HTTP 200, real HTML) - not 502, not
 #    "Kibana server is not ready yet".
 t_kibana_login_html() {
-  local out code body
-  out="$(cca -s -L -w '\n%{http_code}' "${BASE}/login" 2>/dev/null || echo)"
-  code="$(printf '%s' "$out" | tail -n1)"
-  body="$(printf '%s' "$out" | sed '$d')"
-  [ "$code" = "200" ] || return 1
-  printf '%s' "$body" | grep -qi 'not ready' && return 1
-  printf '%s' "$body" | grep -qiE 'kbn|elastic|loginForm|core\.entry'
+  # Kibana's HTTP routes can lag the status API by a second or two, so poll
+  # (bounded) instead of a single shot. This waits for real readiness; it does
+  # not mask a broken Kibana (a genuinely broken one never stops saying so).
+  local out code body i=0
+  while [ "$i" -lt 10 ]; do
+    out="$(cca -s -L -w '\n%{http_code}' "${BASE}/login" 2>/dev/null || echo)"
+    code="${out##*$'\n'}"
+    body="${out%$'\n'*}"
+    if [ "$code" = "200" ] && ! grep -qi 'not ready' <<<"$body" \
+       && grep -qiE 'kbn|elastic|loginForm' <<<"$body"; then
+      return 0
+    fi
+    i=$((i + 1)); sleep 2
+  done
+  return 1
 }
 check "Kibana serves a real login page (HTTP 200, not 'server not ready')" t_kibana_login_html
 
@@ -103,7 +117,7 @@ t_roundtrip() {
       -H 'Content-Type: application/json' -d '{"msg":"hello-roundtrip"}' 2>/dev/null || return 1
   doc="$(cca -s -u "elastic:${ELASTIC_PW}" "${BASE}/es/${idx}/_search?q=msg:hello-roundtrip" 2>/dev/null || true)"
   cca -s -o /dev/null -u "elastic:${ELASTIC_PW}" -X DELETE "${BASE}/es/${idx}" 2>/dev/null || true
-  printf '%s' "$doc" | grep -q 'hello-roundtrip'
+  grep -q 'hello-roundtrip' <<<"$doc"
 }
 check "Full data round trip (create index, write, search, read back, delete)" t_roundtrip
 
@@ -113,10 +127,12 @@ check "Elasticsearch:9200 and Kibana:5601 are NOT reachable from outside" t_back
 
 # 10. Edge certificate: unexpired and its SAN covers the public IP clients use.
 t_cert_valid() {
-  local pem; pem="$(echo | openssl s_client -connect "${IP}:443" 2>/dev/null | openssl x509 2>/dev/null)"
+  local pem san
+  pem="$(echo | openssl s_client -connect "${IP}:443" 2>/dev/null | openssl x509 2>/dev/null)"
   [ -n "$pem" ] || return 1
-  echo "$pem" | openssl x509 -noout -checkend 0 >/dev/null 2>&1 || return 1
-  echo "$pem" | openssl x509 -noout -ext subjectAltName 2>/dev/null | grep -q "IP Address:${IP}"
+  openssl x509 -noout -checkend 0 <<<"$pem" >/dev/null 2>&1 || return 1
+  san="$(openssl x509 -noout -ext subjectAltName <<<"$pem" 2>/dev/null || true)"
+  grep -q "IP Address:${IP}" <<<"$san"
 }
 check "Edge certificate is unexpired and its SAN covers ${IP}" t_cert_valid
 
@@ -140,7 +156,7 @@ t_password_auth_disabled() {
   out="$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o PreferredAuthentications=password \
              -o PubkeyAuthentication=no -o StrictHostKeyChecking=accept-new \
              -o UserKnownHostsFile="$KNOWN_HOSTS" "${ADMIN_USER}@${IP}" true 2>&1 || true)"
-  printf '%s' "$out" | grep -qiE 'permission denied \(publickey\)|no more authentication methods'
+  grep -qiE 'permission denied \(publickey\)|no more authentication methods' <<<"$out"
 }
 check "Password authentication is disabled (publickey only)" t_password_auth_disabled
 
@@ -149,7 +165,7 @@ t_max_map_count() {
   local live persist
   live="$(sshx 'sysctl -n vm.max_map_count' 2>/dev/null || echo 0)"
   persist="$(sshx 'cat /etc/sysctl.d/99-elasticsearch.conf 2>/dev/null' 2>/dev/null || echo '')"
-  [ "$live" -ge 262144 ] 2>/dev/null && printf '%s' "$persist" | grep -q '262144'
+  [ "$live" -ge 262144 ] 2>/dev/null && grep -q '262144' <<<"$persist"
 }
 check "vm.max_map_count >= 262144 and persisted in /etc/sysctl.d" t_max_map_count
 
