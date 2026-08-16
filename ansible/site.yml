@@ -1,0 +1,45 @@
+---
+# ===========================================================================
+# CONFIGURATION ONLY.
+#
+# Terraform has already created the network, volumes and (idle, waiting)
+# containers. This playbook does everything "inside": PKI, TLS material, config
+# files, password bootstrap, and readiness gating. Ordered strictly:
+#   CA/secrets -> Elasticsearch -> Kibana -> nginx edge
+# because each layer depends on the previous being genuinely ready (not just
+# "started"): Kibana authenticates to ES; nginx proxies to both.
+#
+# The elk hosts use the community.docker.docker_api connection (set in the
+# generated inventory): commands run via `docker exec`, file installs via the
+# Docker API - no SSH daemon and no Python interpreter required inside any
+# image.
+# ===========================================================================
+
+- name: Generate internal CA, TLS certificates and deploy secrets
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  tags: [ca, pki]
+  roles:
+    - role: ca
+
+- name: Configure and start Elasticsearch
+  hosts: elasticsearch
+  gather_facts: false # no Python in the image; we never need facts here
+  any_errors_fatal: true
+  roles:
+    - role: elasticsearch
+
+- name: Configure and start Kibana
+  hosts: kibana
+  gather_facts: false
+  any_errors_fatal: true
+  roles:
+    - role: kibana
+
+- name: Configure and start the nginx TLS edge
+  hosts: nginx
+  gather_facts: false
+  any_errors_fatal: true
+  roles:
+    - role: nginx

@@ -1,0 +1,5 @@
+---
+# Internal (unpublished) HTTP port Elasticsearch listens on. Referenced by the
+# health poll and the nginx upstream. Changing it is not expected for a local
+# demo but it is a variable rather than a magic number on principle.
+elasticsearch_http_port: 9200

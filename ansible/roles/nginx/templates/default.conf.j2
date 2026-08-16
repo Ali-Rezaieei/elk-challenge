@@ -1,0 +1,77 @@
+# {{ ansible_managed }}
+# Reverse proxy + TLS termination edge. This replaces the default.conf that
+# ships in the nginx-unprivileged image (same filename in conf.d).
+
+# Loopback-only plaintext stub, used ONLY by the container HEALTHCHECK
+# (busybox wget, since curl is not in the alpine image). Bound to 127.0.0.1 so
+# it is never reachable from the docker network or the host.
+server {
+    listen 127.0.0.1:8081;
+    access_log off;
+    location = /healthz {
+        add_header Content-Type text/plain;
+        return 200 "ok\n";
+    }
+    location / {
+        return 404;
+    }
+}
+
+server {
+    listen 8443 ssl;
+    http2 on;
+    server_name localhost;
+
+    ssl_certificate     {{ nginx_cert_dir }}/nginx.crt;
+    ssl_certificate_key {{ nginx_cert_dir }}/nginx.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    # We only ever serve HTTPS, so HSTS is safe to assert.
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    # Docker's embedded DNS resolver. Combined with the variables below, it lets
+    # nginx re-resolve the backends if a container restarts and changes IP.
+    resolver 127.0.0.11 valid=10s ipv6=off;
+
+    # Kibana bundle uploads and ES bulk requests can be large.
+    client_max_body_size 100m;
+
+    # --- Elasticsearch REST API, namespaced under /es/ --------------------
+    location /es/ {
+        set $es_upstream elasticsearch;
+        rewrite ^/es/(.*)$ /$1 break;
+        proxy_pass https://$es_upstream:9200;
+        proxy_ssl_verify on;
+        proxy_ssl_trusted_certificate {{ nginx_cert_dir }}/ca.crt;
+        proxy_ssl_name elasticsearch;
+        proxy_ssl_server_name on;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    # --- Kibana UI at the root --------------------------------------------
+    location / {
+        set $kb_upstream kibana;
+        proxy_pass https://$kb_upstream:5601;
+        proxy_ssl_verify on;
+        proxy_ssl_trusted_certificate {{ nginx_cert_dir }}/ca.crt;
+        proxy_ssl_name kibana;
+        proxy_ssl_server_name on;
+
+        # Kibana uses websockets; forward the upgrade handshake.
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 180s;
+    }
+}

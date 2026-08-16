@@ -1,0 +1,21 @@
+---
+# Pinned collection versions. Pinning matters because module behaviour (e.g.
+# community.docker's API handling) changes between majors; an unpinned install
+# would make "reproducible" a lie the day upstream cuts a release.
+#
+# These versions are deliberately chosen to support a broad ansible-core floor
+# (>= 2.15), so the stack runs on the ansible-core that ships with most current
+# distros without forcing an upgrade.
+collections:
+  # docker_container_copy_into (with `content:`), docker_container_exec and
+  # docker_container_info are the control-node primitives we use to configure
+  # containers WITHOUT a Python interpreter or SSH daemon inside each image.
+  - name: community.docker
+    version: "3.10.4"
+  # openssl_privatekey / openssl_csr / x509_certificate build the internal CA
+  # and leaf certs. >= 2.20 provides `ignore_timestamps` for idempotent issuance.
+  - name: community.crypto
+    version: "2.22.3"
+  # profile_tasks callback (task timing) used by ansible.cfg.
+  - name: ansible.posix
+    version: "1.5.4"

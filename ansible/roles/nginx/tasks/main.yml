@@ -1,0 +1,70 @@
+---
+# Runs against the (idle, waiting) nginx container. nginx-unprivileged runs as
+# uid 101 with a read-only root filesystem, so config and certs land in the two
+# writable named volumes Terraform mounted.
+
+- name: Install CA + edge TLS material into the nginx certs volume
+  community.docker.docker_container_copy_into:
+    container: "{{ ansible_host }}"
+    path: "{{ item.src }}"
+    container_path: "{{ nginx_cert_dir }}/{{ item.dest }}"
+    owner_id: 101 # nginx-unprivileged user
+    group_id: 0
+  loop:
+    # The CA and the edge cert/key. The edge cert is either the internal CA's
+    # nginx leaf or an externally supplied certificate (see use_external_edge_cert).
+    - src: "{{ pki_dir }}/ca.crt"
+      dest: "ca.crt"
+    - src: "{{ external_edge_cert if use_external_edge_cert else pki_dir ~ '/nginx.crt' }}"
+      dest: "nginx.crt"
+    - src: "{{ external_edge_key if use_external_edge_cert else pki_dir ~ '/nginx.key' }}"
+      dest: "nginx.key"
+  loop_control:
+    label: "{{ item.dest }}"
+  delegate_to: localhost
+
+- name: Render and install the reverse-proxy config
+  community.docker.docker_container_copy_into:
+    container: "{{ ansible_host }}"
+    content: "{{ lookup('ansible.builtin.template', 'default.conf.j2') }}"
+    container_path: "/etc/nginx/conf.d/default.conf"
+    owner_id: 101
+    group_id: 0
+    # Required by the module when `content` is used. Decimal on purpose (see the
+    # elasticsearch role for the full rationale). 420 == 0o644 == rw-r--r--.
+    mode: 420
+  delegate_to: localhost
+  # If the config genuinely changes on a later run, reload nginx live.
+  notify: Reload nginx
+
+# Create the sentinel over the Docker API (not `raw touch`). The nginx_certs
+# named volume is created root:root by Docker, and the in-container nginx user
+# (uid 101) cannot write into a root-owned directory - a `touch` would fail with
+# EACCES. docker_container_copy_into runs as root on the API side, so it can
+# write the file (and owns it to 101). It is also idempotent natively: identical
+# content on a re-run reports "ok", not "changed".
+- name: Signal nginx to start (create the provisioning sentinel)
+  community.docker.docker_container_copy_into:
+    container: "{{ ansible_host }}"
+    content: "provisioned by ansible\n"
+    container_path: "{{ nginx_sentinel }}"
+    owner_id: 101
+    group_id: 0
+    mode: 420 # 0o644
+  delegate_to: localhost
+
+# Functional readiness from the control node, through the ONLY published port.
+# This doubles as proof the whole chain (nginx -> Kibana -> ES) is wired up.
+# validate_certs is off here (verify.sh does the strict CA check); we only need
+# to know the edge is serving.
+- name: Wait for the HTTPS edge to serve content
+  ansible.builtin.uri:
+    url: "https://localhost:{{ published_https_port }}/"
+    method: GET
+    validate_certs: false
+    status_code: [200, 302]
+  register: nginx_edge
+  until: nginx_edge.status in [200, 302]
+  retries: 30
+  delay: 5
+  delegate_to: localhost

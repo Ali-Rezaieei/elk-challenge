@@ -1,0 +1,5 @@
+---
+# This role has no handlers: services start via the Terraform sentinel
+# handshake, and its config is placed before first boot. Config changes to
+# these components take effect on the next `make reset && make deploy`
+# (documented in README -> Known limitations).

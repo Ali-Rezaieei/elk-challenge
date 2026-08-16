@@ -1,0 +1,3 @@
+---
+# Internal (unpublished) port Kibana listens on.
+kibana_server_port: 5601

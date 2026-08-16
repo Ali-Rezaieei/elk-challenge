@@ -1,0 +1,30 @@
+# {{ ansible_managed }}
+# Rendered by Ansible. Contains the kibana_system credential; the running copy
+# lives only inside the container's config volume, never in Git.
+
+server.host: "0.0.0.0"
+server.name: "kibana"
+# Kibana is reached through the nginx edge at the root path. Configurable so a
+# remote deployment can advertise its real host instead of localhost.
+server.publicBaseUrl: "{{ kibana_public_base_url }}"
+
+# --- Kibana serves TLS too, so the nginx -> Kibana hop is encrypted ---------
+server.ssl.enabled: true
+server.ssl.certificate: "{{ kb_config_dir }}/certs/kibana.crt"
+server.ssl.key: "{{ kb_config_dir }}/certs/kibana.key"
+
+# --- Connection to Elasticsearch over HTTPS, verifying the internal CA ------
+elasticsearch.hosts: ["https://elasticsearch:9200"]
+elasticsearch.username: "kibana_system"
+elasticsearch.password: "{{ es_kibana_system_password }}"
+elasticsearch.ssl.certificateAuthorities: ["{{ kb_config_dir }}/certs/ca.crt"]
+elasticsearch.ssl.verificationMode: full
+
+# --- Persistent encryption keys (see group_vars/all.yml for why these are
+# generated once and reused) ------------------------------------------------
+xpack.security.encryptionKey: "{{ kibana_encryption_key }}"
+xpack.encryptedSavedObjects.encryptionKey: "{{ kibana_saved_objects_key }}"
+xpack.reporting.encryptionKey: "{{ kibana_reporting_key }}"
+
+# Quieter, more predictable logs for a demo.
+logging.root.level: warn

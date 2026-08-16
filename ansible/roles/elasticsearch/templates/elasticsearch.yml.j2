@@ -1,0 +1,36 @@
+# {{ ansible_managed }}
+# Rendered by Ansible. Do not edit inside the container - changes are
+# overwritten on the next deploy.
+
+cluster.name: "{{ es_cluster_name }}"
+node.name: "{{ es_node_name }}"
+
+# Listen on all interfaces *inside* the private network. The container has no
+# published port, so "0.0.0.0" here is only reachable from the docker network.
+# NOTE: a non-loopback network.host puts ES in "production" mode, which enforces
+# bootstrap checks (e.g. vm.max_map_count >= 262144). preflight guarantees that.
+network.host: 0.0.0.0
+
+# Single-node cluster: skips the discovery/quorum bootstrap checks that only
+# make sense for a multi-node cluster. Scaling out is discussed in the README.
+discovery.type: single-node
+
+# --- Authentication --------------------------------------------------------
+xpack.security.enabled: true
+
+# --- TLS on the HTTP (REST) layer -----------------------------------------
+# This is what makes Elasticsearch itself reachable only over HTTPS; nginx
+# proxies to it over this TLS listener and verifies the internal CA.
+xpack.security.http.ssl.enabled: true
+xpack.security.http.ssl.key: certs/es.key
+xpack.security.http.ssl.certificate: certs/es.crt
+xpack.security.http.ssl.certificate_authorities: ["certs/ca.crt"]
+
+# --- TLS on the transport layer -------------------------------------------
+# Defense in depth: even single-node inter-node traffic is encrypted and
+# authenticated with the same internal CA.
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: certificate
+xpack.security.transport.ssl.key: certs/es.key
+xpack.security.transport.ssl.certificate: certs/es.crt
+xpack.security.transport.ssl.certificate_authorities: ["certs/ca.crt"]

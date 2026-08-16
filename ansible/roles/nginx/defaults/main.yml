@@ -1,0 +1,5 @@
+---
+# In-container listen port for the TLS edge. Terraform publishes the host port
+# (published_https_port) and maps it to this. Kept as a variable so the two
+# ends of the mapping are both explicit.
+nginx_listen_port: 8443

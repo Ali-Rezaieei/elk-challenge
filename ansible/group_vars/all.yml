@@ -1,0 +1,63 @@
+---
+# ===========================================================================
+# Static configuration for the whole deployment.
+#
+# Dynamic, Terraform-derived facts (container names, network, published port,
+# stack version, in-container paths) arrive via the GENERATED inventory
+# (ansible/inventory/hosts.yml). They are intentionally NOT duplicated here so
+# there is a single source of truth per fact.
+# ===========================================================================
+
+# --- Cluster identity ------------------------------------------------------
+es_cluster_name: "elk-local"
+es_node_name: "es01"
+
+# --- Deploy-time secrets ---------------------------------------------------
+# The `password` lookup GENERATES a value on first use, PERSISTS it to the
+# given file, and returns that same value on every later reference. Two things
+# fall out of that, both required by the brief:
+#   1. Idempotency  - the same password every run, so re-runs are no-ops.
+#   2. Secret hygiene - the values live only under ansible/.secrets, which is
+#      gitignored; they never touch Terraform state or Git.
+# Charset is restricted to letters+digits so a value is always safe inside a
+# URL, an HTTP header, or a shell command without quoting surprises. 62^24 is
+# ~10^43 of entropy - far beyond what a local demo credential needs.
+secrets_dir: "{{ playbook_dir }}/.secrets"
+es_elastic_password: "{{ lookup('password', secrets_dir ~ '/elastic_password chars=ascii_letters,digits length=24') }}"
+es_kibana_system_password: "{{ lookup('password', secrets_dir ~ '/kibana_system_password chars=ascii_letters,digits length=24') }}"
+
+# Kibana refuses to start without stable encryption keys and warns loudly if
+# they rotate between runs; generating+persisting them the same way keeps runs
+# idempotent and saved objects readable.
+kibana_encryption_key: "{{ lookup('password', secrets_dir ~ '/kibana_encryption_key chars=ascii_letters,digits length=32') }}"
+kibana_saved_objects_key: "{{ lookup('password', secrets_dir ~ '/kibana_saved_objects_key chars=ascii_letters,digits length=32') }}"
+kibana_reporting_key: "{{ lookup('password', secrets_dir ~ '/kibana_reporting_key chars=ascii_letters,digits length=32') }}"
+
+# --- Internal PKI ----------------------------------------------------------
+pki_dir: "{{ playbook_dir }}/.certs"
+ca_common_name: "elk-local internal CA"
+# Leaf certs: keep under the 825-day limit modern browsers/clients enforce.
+cert_validity_days: 825
+ca_validity_days: 1825
+
+# Escape hatch: supply an externally-issued certificate for the edge (nginx)
+# instead of the internal CA's self-signed one. The backend hop (nginx<->ES,
+# nginx<->Kibana) always uses the internal CA regardless.
+use_external_edge_cert: false
+external_edge_cert: "" # path on the control node to a fullchain PEM
+external_edge_key: "" # path on the control node to the private key PEM
+
+# --- Kibana public URL -----------------------------------------------------
+# The address Kibana advertises in generated links (shared dashboards, emails).
+# Defaults to the single published localhost endpoint. Override this if you
+# expose the stack under a different host/IP (e.g. a VM address or a DNS name),
+# otherwise Kibana's share links would point at localhost and break for remote
+# users. published_https_port comes from the Terraform-generated inventory.
+kibana_public_base_url: "https://localhost:{{ published_https_port }}"
+
+# --- Readiness gating (bounded polls, never a bare sleep) ------------------
+# Elasticsearch first boot (JVM + index recovery) is the long pole.
+es_health_retries: 60 # 60 * 5s = up to 5 minutes
+es_health_delay: 5
+kibana_health_retries: 60 # Kibana waits on ES, then optimises bundles
+kibana_health_delay: 5

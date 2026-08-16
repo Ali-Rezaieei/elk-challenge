@@ -1,0 +1,28 @@
+---
+# Leaf certificates issued by the internal CA. CN + SANs must cover every name
+# a client will use to reach the service:
+#   - the docker network alias (how the other containers connect),
+#   - localhost / 127.0.0.1 (how the host and health checks connect),
+#   - the actual container name (belt-and-braces for direct exec checks).
+# hostvars[...] pulls the real container names straight from the generated
+# inventory, so these never drift from what Terraform created.
+ca_leaf_certificates:
+  - name: elasticsearch
+    cn: elasticsearch
+    sans:
+      - "DNS:elasticsearch"
+      - "DNS:localhost"
+      - "IP:127.0.0.1"
+      - "DNS:{{ hostvars['elasticsearch'].ansible_host }}"
+  - name: kibana
+    cn: kibana
+    sans:
+      - "DNS:kibana"
+      - "DNS:localhost"
+      - "IP:127.0.0.1"
+      - "DNS:{{ hostvars['kibana'].ansible_host }}"
+  - name: nginx
+    cn: localhost
+    sans:
+      - "DNS:localhost"
+      - "IP:127.0.0.1"

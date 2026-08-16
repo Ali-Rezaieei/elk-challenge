@@ -1,0 +1,129 @@
+---
+# Runs against the (idle, waiting) Elasticsearch container. File installs go
+# over the Docker API (delegate_to localhost); in-container commands go over
+# the docker_api connection via `raw` (no Python needed in the image).
+
+- name: Ensure the certs directory exists inside the ES config volume
+  ansible.builtin.raw: "mkdir -p {{ es_config_dir }}/certs"
+  # mkdir -p is inherently idempotent; there is no natural "changed" signal to
+  # read, so we assert no-change rather than reporting a false positive.
+  changed_when: false
+
+- name: Install CA + node TLS material into the ES config volume
+  community.docker.docker_container_copy_into:
+    container: "{{ ansible_host }}"
+    path: "{{ pki_dir }}/{{ item.src }}"
+    container_path: "{{ es_config_dir }}/certs/{{ item.dest }}"
+    # ES runs as uid 1000; group 0 matches the image's config ownership.
+    owner_id: 1000
+    group_id: 0
+  loop:
+    - { src: "ca.crt", dest: "ca.crt" }
+    - { src: "elasticsearch.crt", dest: "es.crt" }
+    - { src: "elasticsearch.key", dest: "es.key" }
+  loop_control:
+    label: "{{ item.dest }}"
+  delegate_to: localhost
+
+- name: Render and install elasticsearch.yml
+  community.docker.docker_container_copy_into:
+    container: "{{ ansible_host }}"
+    content: "{{ lookup('ansible.builtin.template', 'elasticsearch.yml.j2') }}"
+    container_path: "{{ es_config_dir }}/elasticsearch.yml"
+    owner_id: 1000
+    group_id: 0
+    # `mode` is REQUIRED by the module whenever `content` is used (no source
+    # file to inherit from). IMPORTANT: this module's `mode` is a genuine INTEGER
+    # (unlike ansible.builtin.copy, which accepts a "0644" string). We give the
+    # DECIMAL value on purpose:
+    #   * "0644" (string) -> int("0644")=644 dec = octal 1204 -> strips owner
+    #     read and breaks the keystore step.
+    #   * 0644 (implicit octal) parses correctly but ansible-lint forbids it.
+    #   * 0o644 (explicit octal) is parsed as a STRING by the YAML 1.1 loader
+    #     and then fails int coercion at run time.
+    # 420 == 0o644 == rw-r--r--. Unambiguous on every Ansible version.
+    mode: 420
+  delegate_to: localhost
+
+# The elastic superuser password is seeded via the keystore's bootstrap.password
+# BEFORE first boot. Doing it here (Ansible) keeps the secret out of Terraform
+# state and out of the container's environment. Guarded so re-runs are no-ops.
+- name: Seed the elastic bootstrap password into the ES keystore (first run only)
+  ansible.builtin.raw: |
+    set -eu
+    KS=/usr/share/elasticsearch/bin/elasticsearch-keystore
+    KEYSTORE=/usr/share/elasticsearch/config/elasticsearch.keystore
+    if $KS list 2>/dev/null | grep -qx 'bootstrap.password'; then
+      echo OK_EXISTS
+    else
+      [ -f "$KEYSTORE" ] || $KS create --silent
+      printf '%s' '{{ es_elastic_password }}' | $KS add --stdin --force bootstrap.password
+      echo OK_CREATED
+    fi
+  register: elasticsearch_keystore
+  changed_when: "'OK_CREATED' in elasticsearch_keystore.stdout"
+  no_log: true # never echo the password into the Ansible log
+
+# Flipping the sentinel is the moment Elasticsearch actually starts (the
+# Terraform entrypoint has been blocking on this file). Created over the Docker
+# API (not `raw touch`) for consistency with nginx and so we never depend on the
+# mounted config directory's ownership; the module is idempotent on re-runs.
+- name: Signal Elasticsearch to start (create the provisioning sentinel)
+  community.docker.docker_container_copy_into:
+    container: "{{ ansible_host }}"
+    content: "provisioned by ansible\n"
+    container_path: "{{ es_sentinel }}"
+    owner_id: 1000
+    group_id: 0
+    mode: 420 # 0o644
+  delegate_to: localhost
+
+# Bounded readiness poll against the real cluster health API - never a bare
+# sleep. yellow is expected and healthy on a single node (see README).
+- name: Wait for Elasticsearch to reach green or yellow
+  block:
+    - name: Poll the cluster health API
+      ansible.builtin.raw: >
+        curl -s -k -u 'elastic:{{ es_elastic_password }}'
+        'https://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s'
+      register: elasticsearch_health
+      until: elasticsearch_health.stdout is search('"status":"(green|yellow)"')
+      retries: "{{ es_health_retries }}"
+      delay: "{{ es_health_delay }}"
+      changed_when: false
+      no_log: true # the -u flag would otherwise print the password
+  rescue:
+    - name: Report a useful readiness timeout instead of a raw stack trace
+      ansible.builtin.fail:
+        msg: >-
+          Elasticsearch did not become healthy within
+          {{ es_health_retries | int * es_health_delay | int }}s.
+          Inspect the container log:  docker logs {{ ansible_host }}
+
+# Kibana connects as kibana_system; set that password now, through the ES API,
+# authenticating as elastic. Guarded on a successful kibana_system auth so a
+# second run is a no-op.
+- name: Set the kibana_system password via the ES security API
+  ansible.builtin.raw: |
+    set -eu
+    AUTH=$(curl -s -k -o /dev/null -w '%{http_code}' \
+      -u 'kibana_system:{{ es_kibana_system_password }}' \
+      https://localhost:9200/_security/_authenticate)
+    # Only (re)set the password when ES actively REJECTS the current one (401/403).
+    # A 200 means it is already correct -> no-op. Any other code (e.g. 000/5xx) is
+    # a transient/unexpected state, so we fail loudly instead of blindly POSTing.
+    case "$AUTH" in
+      200)
+        echo OK_EXISTS ;;
+      401|403)
+        curl -s -k -u 'elastic:{{ es_elastic_password }}' \
+          -X POST https://localhost:9200/_security/user/kibana_system/_password \
+          -H 'Content-Type: application/json' \
+          -d '{"password":"{{ es_kibana_system_password }}"}' >/dev/null
+        echo OK_CREATED ;;
+      *)
+        echo "UNEXPECTED_HTTP_${AUTH}"; exit 1 ;;
+    esac
+  register: elasticsearch_kibana_pw
+  changed_when: "'OK_CREATED' in elasticsearch_kibana_pw.stdout"
+  no_log: true

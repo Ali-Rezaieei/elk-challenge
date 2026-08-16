@@ -1,0 +1,31 @@
+# ---------------------------------------------------------------------------
+# Copy to terraform.tfvars and adjust ONLY if a default collides with your
+# environment (preflight will tell you if it does). Every value has a working
+# default in variables.tf, so an untouched deploy needs no tfvars at all.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# terraform.tfvars is gitignored; this .example file is the committed template.
+# ---------------------------------------------------------------------------
+
+# Prefix applied to every Docker object (network, volumes, containers) so the
+# whole stack is greppable and `make reset` can scope teardown precisely.
+# project_prefix = "elk-local"
+
+# The single HTTPS port published to the host. Change if 8443 is taken.
+# published_https_port = 8443
+
+# Deliberately unusual /24 to avoid colliding with common home/VPN/corporate
+# ranges (192.168.0/1.0, 10.0.0/8, 172.17.0/16 default bridge, etc.).
+# network_subnet = "172.31.240.0/24"
+
+# Pinned image versions. Elasticsearch and Kibana MUST match.
+# elastic_stack_version = "8.15.3"
+# nginx_image           = "nginxinc/nginx-unprivileged:1.27.2-alpine"
+
+# Memory ceilings (bytes handled in variables.tf). Raise on a bigger machine.
+# elasticsearch_memory_mb = 2048
+# kibana_memory_mb        = 1024
+
+# Elasticsearch JVM heap. Rule of thumb: ~50% of the container memory limit.
+# elasticsearch_heap = "1g"

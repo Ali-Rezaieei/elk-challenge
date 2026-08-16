@@ -1,0 +1,9 @@
+---
+# nginx is the one component that can apply new config without a full recreate.
+# ES/Kibana settings changes require `make reset && make deploy` (documented as
+# a known limitation of the sentinel-based first-run model).
+- name: Reload nginx
+  community.docker.docker_container_exec:
+    container: "{{ ansible_host }}"
+    command: nginx -s reload
+  delegate_to: localhost

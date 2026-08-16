@@ -1,0 +1,41 @@
+# ---------------------------------------------------------------------------
+# Secret hygiene: nothing generated at deploy time may ever enter version
+# control. The reviewer will grep the tree for the generated password; it must
+# only ever exist under one of the paths below.
+# ---------------------------------------------------------------------------
+
+# Terraform state can contain resource attributes and is environment-specific.
+terraform/.terraform/
+# The provider lock file is per-OS (it records platform-specific hashes). Since
+# reviewers run on Linux/macOS/Windows, we let each machine resolve it against
+# the pinned "~> 3.0" constraint in versions.tf rather than shipping a lock that
+# only matches one platform. Regenerate cross-platform with:
+#   terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 ...
+terraform/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Real variable files (only the *.example is committed).
+terraform/terraform.tfvars
+*.auto.tfvars
+
+# Terraform -> Ansible handover artefact, written from TF state at apply time.
+ansible/inventory/hosts.yml
+
+# Deploy-time secrets: generated passwords live here and nowhere else.
+ansible/.secrets/
+
+# Deploy-time PKI: the internal CA and all leaf certificates/keys.
+ansible/.certs/
+
+# Ansible bookkeeping.
+ansible/*.retry
+ansible/collections/
+
+# OS / editor noise.
+.DS_Store
+Thumbs.db
+*.swp
+*~

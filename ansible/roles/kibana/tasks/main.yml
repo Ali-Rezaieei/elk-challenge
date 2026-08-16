@@ -1,0 +1,69 @@
+---
+# Runs against the (idle, waiting) Kibana container. Kibana depends on ES being
+# healthy, which the previous play guaranteed before this one starts.
+
+- name: Ensure the certs directory exists inside the Kibana config volume
+  ansible.builtin.raw: "mkdir -p {{ kb_config_dir }}/certs"
+  changed_when: false
+
+- name: Install CA + server TLS material into the Kibana config volume
+  community.docker.docker_container_copy_into:
+    container: "{{ ansible_host }}"
+    path: "{{ pki_dir }}/{{ item.src }}"
+    container_path: "{{ kb_config_dir }}/certs/{{ item.dest }}"
+    owner_id: 1000 # Kibana runs as uid 1000
+    group_id: 0
+  loop:
+    - { src: "ca.crt", dest: "ca.crt" }
+    - { src: "kibana.crt", dest: "kibana.crt" }
+    - { src: "kibana.key", dest: "kibana.key" }
+  loop_control:
+    label: "{{ item.dest }}"
+  delegate_to: localhost
+
+- name: Render and install kibana.yml
+  community.docker.docker_container_copy_into:
+    container: "{{ ansible_host }}"
+    content: "{{ lookup('ansible.builtin.template', 'kibana.yml.j2') }}"
+    container_path: "{{ kb_config_dir }}/kibana.yml"
+    owner_id: 1000
+    group_id: 0
+    # Required by the module when `content` is used. Decimal on purpose (see the
+    # elasticsearch role for the full rationale): this module's `mode` is a true
+    # int. 416 == 0o640 == rw-r----- : the file carries the kibana_system
+    # password, so it must not be world-readable.
+    mode: 416
+  delegate_to: localhost
+  no_log: true # the rendered file contains the kibana_system password
+
+# Created over the Docker API (not `raw touch`) for consistency with the other
+# roles and so we never depend on the mounted config directory's ownership; the
+# module is idempotent on re-runs.
+- name: Signal Kibana to start (create the provisioning sentinel)
+  community.docker.docker_container_copy_into:
+    container: "{{ ansible_host }}"
+    content: "provisioned by ansible\n"
+    container_path: "{{ kb_sentinel }}"
+    owner_id: 1000
+    group_id: 0
+    mode: 420 # 0o644
+  delegate_to: localhost
+
+# Bounded poll against Kibana's own status API. status.overall.level becomes
+# "available" only once Kibana has connected to ES and finished optimising.
+- name: Wait for Kibana to report "available"
+  block:
+    - name: Poll the Kibana status API
+      ansible.builtin.raw: "curl -s -k https://localhost:5601/api/status"
+      register: kibana_status
+      until: kibana_status.stdout is search('"level":"available"')
+      retries: "{{ kibana_health_retries }}"
+      delay: "{{ kibana_health_delay }}"
+      changed_when: false
+  rescue:
+    - name: Report a useful readiness timeout instead of a raw stack trace
+      ansible.builtin.fail:
+        msg: >-
+          Kibana did not become available within
+          {{ kibana_health_retries | int * kibana_health_delay | int }}s.
+          Inspect the container log:  docker logs {{ ansible_host }}
