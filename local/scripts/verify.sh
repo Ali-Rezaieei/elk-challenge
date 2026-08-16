@@ -107,6 +107,33 @@ t_cert_valid() {
 }
 check "Edge certificate is unexpired and its SAN/CN covers 'localhost'" t_cert_valid
 
+# 9. Kibana serves a real login page (HTTP 200, real HTML) - not 502 and not
+#    "Kibana server is not ready yet".
+t_kibana_login_html() {
+  local out code body
+  out="$(cca -s -L -w '\n%{http_code}' "${BASE}/login" 2>/dev/null || echo)"
+  code="$(printf '%s' "$out" | tail -n1)"
+  body="$(printf '%s' "$out" | sed '$d')"
+  [ "$code" = "200" ] || return 1
+  printf '%s' "$body" | grep -qi 'not ready' && return 1
+  printf '%s' "$body" | grep -qiE 'kbn|elastic|loginForm|core\.entry'
+}
+check "Kibana serves a real login page (HTTP 200, not 'server not ready')" t_kibana_login_html
+
+# 10. FULL ROUND TRIP: create an index, write a doc, search+read it back, then
+#     delete the index. Proves data flows, not just that a port answers.
+t_roundtrip() {
+  local idx="verify-rt-$$" doc
+  cca -s -o /dev/null -u "elastic:${ELASTIC_PW}" -X PUT "${BASE}/es/${idx}" \
+      -H 'Content-Type: application/json' -d '{"settings":{"number_of_replicas":0}}' 2>/dev/null || return 1
+  cca -s -o /dev/null -u "elastic:${ELASTIC_PW}" -X POST "${BASE}/es/${idx}/_doc/1?refresh=true" \
+      -H 'Content-Type: application/json' -d '{"msg":"hello-roundtrip"}' 2>/dev/null || return 1
+  doc="$(cca -s -u "elastic:${ELASTIC_PW}" "${BASE}/es/${idx}/_search?q=msg:hello-roundtrip" 2>/dev/null || true)"
+  cca -s -o /dev/null -u "elastic:${ELASTIC_PW}" -X DELETE "${BASE}/es/${idx}" 2>/dev/null || true
+  printf '%s' "$doc" | grep -q 'hello-roundtrip'
+}
+check "Full data round trip (create index, write, search, read back, delete)" t_roundtrip
+
 section "Result"
 printf '  %sPASS=%d  FAIL=%d%s\n' "$C_BOLD" "$PASS_COUNT" "$FAIL_COUNT" "$C_RESET"
 if [ "$FAIL_COUNT" -gt 0 ]; then

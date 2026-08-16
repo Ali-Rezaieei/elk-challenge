@@ -53,7 +53,9 @@ tests. First run takes ~3–6 minutes (image download + first boot); later runs
   [PASS] Authenticated request succeeds
   [PASS] Elasticsearch:9200 and Kibana:5601 are NOT reachable from the host
   [PASS] Edge certificate is valid and covers 'localhost'
-  PASS=8  FAIL=0
+  [PASS] Kibana serves a real login page (not "server not ready")
+  [PASS] Full data round trip (create index, write, search, read back, delete)
+  PASS=10  FAIL=0
 
   URL:      https://localhost:8443/
   Username: elastic

@@ -1,0 +1,38 @@
+#cloud-config
+# Unattended FIRST BOOT only. This runs once and is not idempotent; all ongoing
+# configuration is Ansible's job. It does the minimum a fresh server needs
+# before Ansible can safely take over.
+
+users:
+  - name: ${admin_user}
+    groups: [sudo]
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+# Harden SSH: no root login, no password auth.
+disable_root: true
+ssh_pwauth: false
+
+package_update: true
+packages:
+  - python3        # required by Ansible
+  - python3-apt    # apt module needs it
+
+write_files:
+  # Elasticsearch requires this kernel setting; make it persistent.
+  - path: /etc/sysctl.d/99-elasticsearch.conf
+    content: |
+      vm.max_map_count=262144
+    permissions: "0644"
+
+runcmd:
+  - [ sysctl, --system ]
+  # A marker Ansible polls on, in addition to `cloud-init status --wait`.
+  - mkdir -p /var/lib/provision
+  - touch /var/lib/provision/cloud-init-done
+
+# Leave a clear final message in the cloud-init log.
+final_message: "cloud-init finished after $UPTIME seconds — server ready for Ansible"

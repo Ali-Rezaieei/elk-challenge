@@ -31,13 +31,13 @@ fi
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   section "Docker sweep for leftover '${PREFIX}-' objects"
   for c in $(docker ps -a --filter "name=${PREFIX}-" --format '{{.Names}}' 2>/dev/null); do
-    docker rm -f "$c" >/dev/null 2>&1 && log_info "removed container $c" || true
+    if docker rm -f "$c" >/dev/null 2>&1; then log_info "removed container $c"; fi
   done
   for v in $(docker volume ls --filter "name=${PREFIX}-" --format '{{.Name}}' 2>/dev/null); do
-    docker volume rm "$v" >/dev/null 2>&1 && log_info "removed volume $v" || true
+    if docker volume rm "$v" >/dev/null 2>&1; then log_info "removed volume $v"; fi
   done
   if docker network ls --format '{{.Name}}' | grep -q "^${PREFIX}-net$"; then
-    docker network rm "${PREFIX}-net" >/dev/null 2>&1 && log_info "removed network ${PREFIX}-net" || true
+    if docker network rm "${PREFIX}-net" >/dev/null 2>&1; then log_info "removed network ${PREFIX}-net"; fi
   fi
 fi
 

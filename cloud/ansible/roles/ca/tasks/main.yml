@@ -1,0 +1,76 @@
+---
+# All PKI is generated on the control node and stored under cloud/ansible/.certs
+# (gitignored). community.crypto modules are idempotent.
+
+- name: Ensure private secret and PKI directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - "{{ secrets_dir }}"
+    - "{{ pki_dir }}"
+
+- name: Generate the internal CA private key
+  community.crypto.openssl_privatekey:
+    path: "{{ pki_dir }}/ca.key"
+    type: RSA
+    size: 4096
+    mode: "0600"
+
+- name: Build the CA signing request
+  community.crypto.openssl_csr:
+    path: "{{ pki_dir }}/ca.csr"
+    privatekey_path: "{{ pki_dir }}/ca.key"
+    common_name: "{{ ca_common_name }}"
+    basic_constraints:
+      - "CA:TRUE"
+    basic_constraints_critical: true
+    key_usage:
+      - keyCertSign
+      - cRLSign
+    key_usage_critical: true
+
+- name: Self-sign the internal CA certificate
+  community.crypto.x509_certificate:
+    path: "{{ pki_dir }}/ca.crt"
+    csr_path: "{{ pki_dir }}/ca.csr"
+    privatekey_path: "{{ pki_dir }}/ca.key"
+    provider: selfsigned
+    selfsigned_not_after: "+{{ ca_validity_days }}d"
+    ignore_timestamps: true
+    mode: "0644"
+
+- name: Generate leaf private keys
+  community.crypto.openssl_privatekey:
+    path: "{{ pki_dir }}/{{ item.name }}.key"
+    type: RSA
+    size: 2048
+    mode: "0600"
+  loop: "{{ ca_leaf_certificates }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Build leaf signing requests (with SANs)
+  community.crypto.openssl_csr:
+    path: "{{ pki_dir }}/{{ item.name }}.csr"
+    privatekey_path: "{{ pki_dir }}/{{ item.name }}.key"
+    common_name: "{{ item.cn }}"
+    subject_alt_name: "{{ item.sans }}"
+  loop: "{{ ca_leaf_certificates }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Sign leaf certificates with the internal CA
+  community.crypto.x509_certificate:
+    path: "{{ pki_dir }}/{{ item.name }}.crt"
+    csr_path: "{{ pki_dir }}/{{ item.name }}.csr"
+    ownca_path: "{{ pki_dir }}/ca.crt"
+    ownca_privatekey_path: "{{ pki_dir }}/ca.key"
+    provider: ownca
+    ownca_not_after: "+{{ cert_validity_days }}d"
+    ignore_timestamps: true
+    mode: "0644"
+  loop: "{{ ca_leaf_certificates }}"
+  loop_control:
+    label: "{{ item.name }}"

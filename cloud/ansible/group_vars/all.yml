@@ -1,0 +1,48 @@
+---
+# ===========================================================================
+# Static configuration for the cloud deployment. Dynamic facts (the server IP,
+# SSH details, stack version) come from the Terraform-generated inventory.
+# ===========================================================================
+
+# --- Cluster identity ------------------------------------------------------
+es_cluster_name: "elk-cloud"
+es_node_name: "es01"
+
+# --- Deploy-time secrets (generated once, reused; gitignored) --------------
+secrets_dir: "{{ playbook_dir }}/.secrets"
+es_elastic_password: "{{ lookup('password', secrets_dir ~ '/elastic_password chars=ascii_letters,digits length=24') }}"
+es_kibana_system_password: "{{ lookup('password', secrets_dir ~ '/kibana_system_password chars=ascii_letters,digits length=24') }}"
+kibana_encryption_key: "{{ lookup('password', secrets_dir ~ '/kibana_encryption_key chars=ascii_letters,digits length=32') }}"
+kibana_saved_objects_key: "{{ lookup('password', secrets_dir ~ '/kibana_saved_objects_key chars=ascii_letters,digits length=32') }}"
+kibana_reporting_key: "{{ lookup('password', secrets_dir ~ '/kibana_reporting_key chars=ascii_letters,digits length=32') }}"
+
+# --- Internal PKI ----------------------------------------------------------
+pki_dir: "{{ playbook_dir }}/.certs"
+ca_common_name: "elk-cloud internal CA"
+cert_validity_days: 825
+ca_validity_days: 1825
+
+# --- Native install paths --------------------------------------------------
+es_config_dir: /etc/elasticsearch
+es_certs_dir: /etc/elasticsearch/certs
+kb_config_dir: /etc/kibana
+kb_certs_dir: /etc/kibana/certs
+nginx_certs_dir: /etc/nginx/certs
+
+# --- Kibana public URL -----------------------------------------------------
+# The address Kibana advertises in generated links. The single entry point is
+# the nginx edge on 443 at the server's public IP (from the generated inventory).
+kibana_public_base_url: "https://{{ public_ipv4 }}"
+
+# --- Elastic APT repository ------------------------------------------------
+elastic_apt_key_url: "https://artifacts.elastic.co/GPG-KEY-elasticsearch"
+elastic_apt_keyring: "/etc/apt/keyrings/elasticsearch.asc"
+elastic_apt_repo: "deb [signed-by=/etc/apt/keyrings/elasticsearch.asc] https://artifacts.elastic.co/packages/8.x/apt stable main"
+
+# --- Readiness gating (bounded polls, never a bare sleep) ------------------
+es_health_retries: 60      # 60 * 5s = up to 5 minutes
+es_health_delay: 5
+kibana_health_retries: 60
+kibana_health_delay: 5
+
+# public_ipv4 and published_https_port arrive from the generated inventory.

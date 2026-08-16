@@ -1,0 +1,121 @@
+---
+# Native Kibana from the official Elastic APT repo, managed by systemd. Kibana
+# depends on Elasticsearch being genuinely healthy, which the previous role
+# guaranteed before this one runs. Kibana serves TLS on loopback; nginx proxies
+# to it.
+
+# The Elastic repo is normally already present (the elasticsearch role ran
+# first in this play), but re-assert it so this role is robust when run with
+# --tags kibana. All tasks are idempotent.
+- name: Ensure the apt keyrings directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Add the Elastic APT signing key
+  ansible.builtin.get_url:
+    url: "{{ elastic_apt_key_url }}"
+    dest: "{{ elastic_apt_keyring }}"
+    mode: "0644"
+
+- name: Add the Elastic 8.x APT repository
+  ansible.builtin.apt_repository:
+    repo: "{{ elastic_apt_repo }}"
+    filename: elastic-8.x
+    state: present
+
+- name: Install Kibana (version-pinned to match Elasticsearch)
+  ansible.builtin.apt:
+    name: "kibana={{ elastic_stack_version }}"
+    state: present
+    update_cache: true
+
+- name: Hold the kibana package so an unattended upgrade cannot bump it
+  ansible.builtin.dpkg_selections:
+    name: kibana
+    selection: hold
+
+# --- TLS material ----------------------------------------------------------
+- name: Ensure the Kibana certs directory exists
+  ansible.builtin.file:
+    path: "{{ kb_certs_dir }}"
+    state: directory
+    owner: root
+    group: kibana
+    mode: "0750"
+
+- name: Install CA + server TLS material
+  ansible.builtin.copy:
+    src: "{{ pki_dir }}/{{ item.src }}"
+    dest: "{{ kb_certs_dir }}/{{ item.dest }}"
+    owner: root
+    group: kibana
+    mode: "0640"
+  loop:
+    - { src: "ca.crt", dest: "ca.crt" }
+    - { src: "kibana.crt", dest: "kibana.crt" }
+    - { src: "kibana.key", dest: "kibana.key" }
+  loop_control:
+    label: "{{ item.dest }}"
+  notify: Restart kibana
+
+# --- Configuration ---------------------------------------------------------
+- name: Render kibana.yml
+  ansible.builtin.template:
+    src: kibana.yml.j2
+    dest: "{{ kb_config_dir }}/kibana.yml"
+    owner: root
+    group: kibana
+    # 0640: the file carries the kibana_system password, so not world-readable.
+    mode: "0640"
+  no_log: true
+  notify: Restart kibana
+
+# --- systemd hardening (unit override) -------------------------------------
+- name: Create the systemd override directory for kibana
+  ansible.builtin.file:
+    path: /etc/systemd/system/kibana.service.d
+    state: directory
+    mode: "0755"
+
+- name: Install the systemd hardening override
+  ansible.builtin.copy:
+    src: hardening.conf
+    dest: /etc/systemd/system/kibana.service.d/hardening.conf
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart kibana
+
+# --- Start + apply any pending config changes before the readiness gate -----
+- name: Enable and start Kibana
+  ansible.builtin.systemd:
+    name: kibana
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Apply any pending restart now (so status reflects the current config)
+  ansible.builtin.meta: flush_handlers
+
+# --- Readiness gate: Kibana genuinely "available" (never a bare sleep) ------
+- name: Wait for Kibana to report "available"
+  block:
+    - name: Poll the Kibana status API (validating the internal CA)
+      ansible.builtin.uri:
+        url: "https://localhost:5601/api/status"
+        validate_certs: true
+        ca_path: "{{ kb_certs_dir }}/ca.crt"
+        return_content: true
+      register: kibana_status
+      until: kibana_status.status == 200 and (kibana_status.json.status.overall.level == 'available')
+      retries: "{{ kibana_health_retries }}"
+      delay: "{{ kibana_health_delay }}"
+  rescue:
+    - name: Report a useful readiness timeout instead of a raw stack trace
+      ansible.builtin.fail:
+        msg: >-
+          Kibana did not become available within
+          {{ kibana_health_retries | int * kibana_health_delay | int }}s.
+          Inspect on the server:  journalctl -u kibana --no-pager | tail -n 100

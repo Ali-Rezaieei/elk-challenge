@@ -1,0 +1,9 @@
+---
+# Pinned collections (broad ansible-core >= 2.15 support).
+collections:
+  # openssl_privatekey / openssl_csr / x509_certificate for the internal CA.
+  - name: community.crypto
+    version: "2.22.3"
+  # profile_tasks callback (task timing).
+  - name: ansible.posix
+    version: "1.5.4"

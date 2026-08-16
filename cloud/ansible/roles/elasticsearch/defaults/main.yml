@@ -1,0 +1,10 @@
+---
+# JVM heap for Elasticsearch (-Xms = -Xmx). The server has 8 GB; 2 GB of heap
+# leaves ample room for the OS page cache, Lucene's off-heap use, and the
+# separate Kibana Node process. Rule of thumb: <= 50% of RAM, never above 31g.
+elasticsearch_heap_size: "2g"
+
+# Where the ES REST/HTTP listener binds. Loopback only: nginx is the sole
+# public-facing service. The firewall never exposes 9200 anyway.
+elasticsearch_bind_host: "127.0.0.1"
+elasticsearch_http_port: 9200

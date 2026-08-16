@@ -11,7 +11,7 @@ PROJECT_PREFIX ?= elk-local
 
 .DEFAULT_GOAL := help
 
-.PHONY: help preflight deploy verify idempotency destroy reset lint
+.PHONY: help preflight deploy verify idempotency destroy reset lint logs
 
 help: ## Show this help.
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -37,3 +37,6 @@ reset: ## Destroy + purge generated certs/secrets/inventory for a true cold star
 
 lint: ## Static analysis: terraform fmt/validate, ansible-lint, shellcheck.
 	@./scripts/lint.sh
+
+logs: ## Tail recent logs from the three containers.
+	@for s in elasticsearch kibana nginx; do printf '\n== %s ==\n' "$$s"; docker logs --tail 40 "$(PROJECT_PREFIX)-$$s" 2>&1 || true; done

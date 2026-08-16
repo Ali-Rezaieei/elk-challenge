@@ -1,0 +1,23 @@
+---
+# yamllint config. We relax a few purely-cosmetic rules that fight with
+# readable Ansible (long descriptive strings, spaced flow-mappings) while
+# keeping the substantive checks (indentation, key duplication, trailing space).
+extends: default
+
+rules:
+  line-length:
+    max: 160
+    level: warning
+  braces:
+    # Allow the readable "{ key: value }" flow-mapping style used in loops.
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false
+
+ignore: |
+  ansible/collections/

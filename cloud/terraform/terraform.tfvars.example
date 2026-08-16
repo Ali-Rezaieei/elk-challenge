@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars and edit if you want to override defaults.
+# The API token is NOT set here - it comes from HCLOUD_TOKEN / TF_VAR_hcloud_token
+# so it never lands on disk. All values below already have working defaults.
+
+# project_prefix = "elk-cloud"
+# location       = "nbg1"          # or fsn1 / hel1 (German/EU zones)
+# server_type    = "cx32"          # cheapest shared-vCPU with 8 GB RAM
+# server_image   = "ubuntu-24.04"
+
+# Lock the firewall down to your own IP for real use (defaults are open so a
+# reviewer can reproduce without editing):
+# allowed_ssh_cidrs   = ["203.0.113.7/32"]
+# allowed_https_cidrs = ["203.0.113.7/32"]
+
+# SSH key paths (public is uploaded to Hetzner; private is used by Ansible):
+# ssh_public_key_path  = "~/.ssh/id_ed25519.pub"
+# ssh_private_key_path = "~/.ssh/id_ed25519"

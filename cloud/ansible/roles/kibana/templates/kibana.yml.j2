@@ -1,0 +1,30 @@
+# {{ ansible_managed }}
+# Rendered by Ansible. Contains the kibana_system credential; the running copy
+# lives only on the server (0640, kibana group), never in Git.
+
+# Bind to loopback only: nginx (same host) is the sole public entry point.
+server.host: "127.0.0.1"
+server.port: 5601
+server.name: "kibana"
+# The address Kibana advertises in generated links (the nginx edge on 443).
+server.publicBaseUrl: "{{ kibana_public_base_url }}"
+
+# --- Kibana serves TLS, so the nginx -> Kibana hop is encrypted -------------
+server.ssl.enabled: true
+server.ssl.certificate: "{{ kb_certs_dir }}/kibana.crt"
+server.ssl.key: "{{ kb_certs_dir }}/kibana.key"
+
+# --- Connection to Elasticsearch over HTTPS, verifying the internal CA ------
+elasticsearch.hosts: ["https://localhost:9200"]
+elasticsearch.username: "kibana_system"
+elasticsearch.password: "{{ es_kibana_system_password }}"
+elasticsearch.ssl.certificateAuthorities: ["{{ kb_certs_dir }}/ca.crt"]
+elasticsearch.ssl.verificationMode: full
+
+# --- Persistent encryption keys (generated once, reused; see group_vars) ----
+xpack.security.encryptionKey: "{{ kibana_encryption_key }}"
+xpack.encryptedSavedObjects.encryptionKey: "{{ kibana_saved_objects_key }}"
+xpack.reporting.encryptionKey: "{{ kibana_reporting_key }}"
+
+# Quieter, more predictable logs.
+logging.root.level: warn

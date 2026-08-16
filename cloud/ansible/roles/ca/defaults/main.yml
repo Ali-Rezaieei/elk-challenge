@@ -1,0 +1,24 @@
+---
+# Leaf certificates issued by the internal CA.
+#  - Elasticsearch and Kibana bind to loopback, so their certs cover
+#    localhost / 127.0.0.1 (nginx and Kibana connect to them over "localhost").
+#  - The nginx edge cert must cover the PUBLIC IP, because that is the address
+#    external clients (and verify.sh) connect to. public_ipv4 comes from the
+#    Terraform-generated inventory.
+ca_leaf_certificates:
+  - name: elasticsearch
+    cn: localhost
+    sans:
+      - "DNS:localhost"
+      - "IP:127.0.0.1"
+  - name: kibana
+    cn: localhost
+    sans:
+      - "DNS:localhost"
+      - "IP:127.0.0.1"
+  - name: nginx
+    cn: "{{ public_ipv4 }}"
+    sans:
+      - "IP:{{ public_ipv4 }}"
+      - "DNS:localhost"
+      - "IP:127.0.0.1"
